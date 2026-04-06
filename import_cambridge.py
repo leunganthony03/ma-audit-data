@@ -3,10 +3,13 @@
 import_cambridge.py  —  Fetch Cambridge Open Data → cambridge.db (SQLite)
 
 Datasets imported:
-  salary       4 rows x ~4k positions (FY2024, FY2025, FY2026)
-  contracts    1,239 contracts
-  bids         7,082 + 1,248 construction bids
-  property     ~30k parcels each for FY2025 and FY2026
+  op_expenditures  ~40k rows  Budget - Operating Expenditures FY2011–2026   (5bn4-5wey)
+  op_revenues      ~1.7k rows Budget - Operating Revenues FY2011–2026       (ixyv-mje6)
+  capital          555 rows   Capital Budget FY2020–2030 (7-year plan)       (9chi-2ed3)
+  salary           ~10k rows  Budget Salaries FY2024/2025/2026               (multiple)
+  contracts        1,239      Contracts Bid List                             (gp98-ja4f)
+  bids             8,330      Bid List (services + construction)             (iud6-avxc, pmii-ykdf)
+  property         30,156     Property Assessments FY2026                    (waa7-ibdu)
 
 Run once (or re-run to refresh):
     python3 import_cambridge.py
@@ -25,7 +28,7 @@ BASE = "https://data.cambridgema.gov"
 HEADERS = {"User-Agent": "cambridge-audit/1.0", "Accept": "application/json"}
 
 
-def socrata_fetch(ds_id, select="*", where=None, order=None, page=2000):
+def socrata_fetch(ds_id, select="*", where=None, order=None, page=2000, timeout=60):
     """Paginate through all rows of a Socrata dataset."""
     rows, offset = [], 0
     while True:
@@ -38,7 +41,7 @@ def socrata_fetch(ds_id, select="*", where=None, order=None, page=2000):
         url = f"{BASE}/resource/{ds_id}.json?{'&'.join(parts)}"
         try:
             req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 batch = json.loads(r.read().decode())
         except Exception as e:
             print(f"  WARN {ds_id} offset={offset}: {e}", file=sys.stderr)
@@ -56,6 +59,42 @@ def socrata_fetch(ds_id, select="*", where=None, order=None, page=2000):
 
 def create_schema(cur):
     cur.executescript("""
+    DROP TABLE IF EXISTS op_expenditures;
+    CREATE TABLE op_expenditures (
+        fiscal_year     TEXT,
+        service         TEXT,
+        department_name TEXT,
+        division_name   TEXT,
+        category        TEXT,
+        description     TEXT,
+        amount          REAL,
+        fund            TEXT
+    );
+
+    DROP TABLE IF EXISTS op_revenues;
+    CREATE TABLE op_revenues (
+        fiscal_year     TEXT,
+        service         TEXT,
+        department_name TEXT,
+        category        TEXT,
+        description     TEXT,
+        amount          REAL,
+        fund            TEXT
+    );
+
+    DROP TABLE IF EXISTS capital;
+    CREATE TABLE capital (
+        fiscal_year     TEXT,
+        department      TEXT,
+        project_id      TEXT,
+        project_name    TEXT,
+        fund            TEXT,
+        city_location   TEXT,
+        latitude        REAL,
+        longitude       REAL,
+        approved_amount REAL
+    );
+
     DROP TABLE IF EXISTS salary;
     CREATE TABLE salary (
         fiscal_year       TEXT,
@@ -135,6 +174,70 @@ def create_schema(cur):
         interior_numunits     INTEGER
     );
     """)
+
+
+def load_operating(cur, conn):
+    print("  → operating expenditures (5bn4-5wey) …")
+    rows = socrata_fetch("5bn4-5wey")
+    cur.executemany("""
+        INSERT INTO op_expenditures VALUES (?,?,?,?,?,?,?,?)
+    """, [
+        (
+            r.get("fiscal_year") or "",
+            r.get("service") or "",
+            r.get("department_name") or "",
+            r.get("division_name") or "",
+            r.get("category") or "",
+            r.get("description") or "",
+            float(r.get("amount") or 0),
+            r.get("fund") or "",
+        )
+        for r in rows
+    ])
+    conn.commit()
+    print(f"    inserted {len(rows):,} operating expenditure rows")
+
+    print("  → operating revenues (ixyv-mje6) …")
+    rows2 = socrata_fetch("ixyv-mje6")
+    cur.executemany("""
+        INSERT INTO op_revenues VALUES (?,?,?,?,?,?,?)
+    """, [
+        (
+            r.get("fiscal_year") or "",
+            r.get("service") or "",
+            r.get("department_name") or "",
+            r.get("category") or "",
+            r.get("description") or "",
+            float(r.get("amount") or 0),
+            r.get("fund") or "",
+        )
+        for r in rows2
+    ])
+    conn.commit()
+    print(f"    inserted {len(rows2):,} operating revenue rows")
+
+
+def load_capital(cur, conn):
+    print("  → capital budget (9chi-2ed3) …")
+    rows = socrata_fetch("9chi-2ed3")
+    cur.executemany("""
+        INSERT INTO capital VALUES (?,?,?,?,?,?,?,?,?)
+    """, [
+        (
+            r.get("fiscal_year") or "",
+            r.get("department") or "",
+            r.get("project_id") or "",
+            r.get("project_name") or "",
+            r.get("fund") or "",
+            r.get("city_location") or "",
+            float(r.get("latitude") or 0),
+            float(r.get("longitude") or 0),
+            float(r.get("approved_amount") or 0),
+        )
+        for r in rows
+    ])
+    conn.commit()
+    print(f"    inserted {len(rows):,} capital budget rows")
 
 
 def load_salary(cur, conn):
@@ -260,7 +363,7 @@ def load_property(cur, conn):
     )
     for ds_id, fy in [("waa7-ibdu", "2026"), ("wb6g-ebmw", "2025")]:
         print(f"  → property FY{fy} ({ds_id}) …")
-        rows = socrata_fetch(ds_id, select=PROP_SELECT)
+        rows = socrata_fetch(ds_id, select=PROP_SELECT, page=500)
         cur.executemany("""
             INSERT INTO property VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, [
@@ -319,6 +422,18 @@ def create_indexes(cur, conn):
         CREATE INDEX IF NOT EXISTS idx_prop_cls   ON property(propertyclass);
         CREATE INDEX IF NOT EXISTS idx_prop_owner ON property(owner_name);
         CREATE INDEX IF NOT EXISTS idx_prop_dist  ON property(taxdistrict);
+
+        CREATE INDEX IF NOT EXISTS idx_opex_fy   ON op_expenditures(fiscal_year);
+        CREATE INDEX IF NOT EXISTS idx_opex_dept ON op_expenditures(department_name);
+        CREATE INDEX IF NOT EXISTS idx_opex_svc  ON op_expenditures(service);
+        CREATE INDEX IF NOT EXISTS idx_opex_cat  ON op_expenditures(category);
+        CREATE INDEX IF NOT EXISTS idx_opex_fund ON op_expenditures(fund);
+
+        CREATE INDEX IF NOT EXISTS idx_oprev_fy   ON op_revenues(fiscal_year);
+        CREATE INDEX IF NOT EXISTS idx_oprev_cat  ON op_revenues(category);
+
+        CREATE INDEX IF NOT EXISTS idx_cap_fy   ON capital(fiscal_year);
+        CREATE INDEX IF NOT EXISTS idx_cap_dept ON capital(department);
     """)
     conn.commit()
     print("    indexes created.")
@@ -333,6 +448,12 @@ def main():
     print("Creating schema …")
     create_schema(cur)
     conn.commit()
+
+    print("Importing operating budget data …")
+    load_operating(cur, conn)
+
+    print("Importing capital budget …")
+    load_capital(cur, conn)
 
     print("Importing salary data …")
     load_salary(cur, conn)
@@ -350,19 +471,14 @@ def main():
     create_indexes(cur, conn)
 
     # Summary
-    cur.execute("SELECT COUNT(*) FROM salary")
-    ns = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM contracts")
-    nc = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM bids")
-    nb = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM property")
-    np = cur.fetchone()[0]
+    for table in ("op_expenditures","op_revenues","capital","salary","contracts","bids","property"):
+        cur.execute(f"SELECT COUNT(*) FROM {table}")
+        n = cur.fetchone()[0]
+        print(f"  {table:<20} {n:>7,} rows")
 
     conn.close()
     size_kb = DB.stat().st_size // 1024
     print(f"\nDone. {DB} ({size_kb:,} KB)")
-    print(f"  salary: {ns:,} rows  |  contracts: {nc:,}  |  bids: {nb:,}  |  property: {np:,}")
 
 
 if __name__ == "__main__":

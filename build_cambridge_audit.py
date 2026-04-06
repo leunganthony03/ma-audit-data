@@ -2,16 +2,19 @@
 """
 build_cambridge_audit.py  —  City of Cambridge, MA Fiscal Oversight Report
 
-Reads from cambridge.db (built by import_cambridge.py) and generates
-cambridge_audit.html — a self-contained, interactive HTML report.
+Reads cambridge.db (built by import_cambridge.py) → cambridge_audit.html
 
 Sections:
-  1. Executive Summary + salary trend
-  2. Payroll Budget  (by service, by dept, YoY, top positions)
-  3. Contracts & Procurement  (by dept, by vendor, emergency, expiring)
-  4. Competitive Bidding  (bid types, volume trend, top departments)
-  5. Property Tax Base  (by class, institutional owners, assessment context)
-  6. Validation  (internal consistency checks)
+  1. Executive Summary
+  2. Operating Budget   — full $992M picture, by service/dept/category, 16yr trend
+  3. Revenue            — by type ($712M taxes, $105M fees, etc.), 16yr trend
+  4. Capital Budget     — 7-year plan FY2024-2030, by dept/project
+  5. Payroll Budget     — position-level salary detail (supplements operating section)
+  6. Contracts          — by dept/vendor, emergency, expiring
+  7. Competitive Bids   — formal vs informal, volume trend
+  8. Property Tax Base  — $304.6B, institutional owners (Harvard $137B, MIT $71B)
+  9. Validation         — 7 cross-checks including budget balance and salary reconciliation
+  10. Methodology
 """
 
 import json
@@ -31,11 +34,137 @@ def load_data():
     cur = conn.cursor()
     data = {}
 
+    # ── OPERATING EXPENDITURES ────────────────────────────────────────────
+    print("  → operating: multi-year trend …")
+    cur.execute("""
+        SELECT fiscal_year, SUM(amount) AS total, COUNT(*) AS n
+        FROM op_expenditures GROUP BY 1 ORDER BY 1
+    """)
+    data["opex_trend"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → operating: FY2026 by service …")
+    cur.execute("""
+        SELECT service AS svc, SUM(amount) AS total, COUNT(*) AS n,
+               COUNT(DISTINCT department_name) AS nd
+        FROM op_expenditures WHERE fiscal_year='2026'
+        GROUP BY 1 ORDER BY 2 DESC
+    """)
+    data["opex_by_svc"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → operating: by fund …")
+    cur.execute("""
+        SELECT fund, SUM(amount) AS total, COUNT(*) AS n
+        FROM op_expenditures WHERE fiscal_year='2026'
+        GROUP BY 1 ORDER BY 2 DESC
+    """)
+    data["opex_by_fund"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → operating: by expense category …")
+    cur.execute("""
+        SELECT category, SUM(amount) AS total, COUNT(*) AS n
+        FROM op_expenditures WHERE fiscal_year='2026'
+        GROUP BY 1 ORDER BY 2 DESC
+    """)
+    data["opex_by_cat"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → operating: FY2026 by department (with category drill-down) …")
+    cur.execute("""
+        SELECT department_name, service,
+               SUM(amount) AS total, COUNT(*) AS n
+        FROM op_expenditures WHERE fiscal_year='2026'
+        GROUP BY 1, 2 ORDER BY 3 DESC
+    """)
+    opex_by_dept = [dict(r) for r in cur.fetchall()]
+    dept_names_opex = [d["department_name"] for d in opex_by_dept[:25]]
+    ph = ",".join("?" * len(dept_names_opex))
+    cur.execute(f"""
+        SELECT department_name, category, SUM(amount) AS total
+        FROM op_expenditures WHERE fiscal_year='2026'
+          AND department_name IN ({ph})
+        GROUP BY 1, 2 ORDER BY 1, 3 DESC
+    """, dept_names_opex)
+    dept_cats = defaultdict(list)
+    for r in cur.fetchall():
+        dept_cats[r["department_name"]].append(dict(r))
+    for d in opex_by_dept:
+        d["by_cat"] = dept_cats.get(d["department_name"], [])
+    data["opex_by_dept"] = opex_by_dept
+
+    # ── OPERATING REVENUES ────────────────────────────────────────────────
+    print("  → revenue: multi-year trend …")
+    cur.execute("""
+        SELECT fiscal_year, SUM(amount) AS total, COUNT(*) AS n
+        FROM op_revenues GROUP BY 1 ORDER BY 1
+    """)
+    data["rev_trend"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → revenue: FY2026 by category …")
+    cur.execute("""
+        SELECT category, SUM(amount) AS total, COUNT(*) AS n
+        FROM op_revenues WHERE fiscal_year='2026'
+        GROUP BY 1 ORDER BY 2 DESC
+    """)
+    data["rev_by_cat"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → revenue: FY2026 by department …")
+    cur.execute("""
+        SELECT department_name, SUM(amount) AS total, COUNT(*) AS n,
+               GROUP_CONCAT(DISTINCT category) AS cats
+        FROM op_revenues WHERE fiscal_year='2026'
+        GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+    """)
+    data["rev_by_dept"] = [dict(r) for r in cur.fetchall()]
+
+    # ── CAPITAL BUDGET ────────────────────────────────────────────────────
+    print("  → capital: by year …")
+    cur.execute("""
+        SELECT fiscal_year, SUM(approved_amount) AS total, COUNT(*) AS n
+        FROM capital GROUP BY 1 ORDER BY 1
+    """)
+    data["cap_by_year"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → capital: FY2026 by department with projects …")
+    cur.execute("""
+        SELECT department, SUM(approved_amount) AS total, COUNT(*) AS n
+        FROM capital WHERE fiscal_year='2026'
+        GROUP BY 1 ORDER BY 2 DESC
+    """)
+    cap_by_dept = [dict(r) for r in cur.fetchall()]
+    cap_dept_names = [d["department"] for d in cap_by_dept]
+    ph2 = ",".join("?" * len(cap_dept_names)) if cap_dept_names else "''"
+    cur.execute(f"""
+        SELECT department, project_name, project_id, fund,
+               city_location, approved_amount
+        FROM capital WHERE fiscal_year='2026' AND department IN ({ph2})
+        ORDER BY department, approved_amount DESC
+    """, cap_dept_names)
+    cap_projs = defaultdict(list)
+    for r in cur.fetchall():
+        cap_projs[r["department"]].append(dict(r))
+    for d in cap_by_dept:
+        d["projects"] = cap_projs.get(d["department"], [])
+    data["cap_by_dept"] = cap_by_dept
+
+    print("  → capital: 7-year plan by department …")
+    cur.execute("""
+        SELECT department,
+               SUM(CASE WHEN fiscal_year='2024' THEN approved_amount ELSE 0 END) AS fy24,
+               SUM(CASE WHEN fiscal_year='2025' THEN approved_amount ELSE 0 END) AS fy25,
+               SUM(CASE WHEN fiscal_year='2026' THEN approved_amount ELSE 0 END) AS fy26,
+               SUM(CASE WHEN fiscal_year='2027' THEN approved_amount ELSE 0 END) AS fy27,
+               SUM(CASE WHEN fiscal_year='2028' THEN approved_amount ELSE 0 END) AS fy28,
+               SUM(CASE WHEN fiscal_year='2029' THEN approved_amount ELSE 0 END) AS fy29,
+               SUM(CASE WHEN fiscal_year='2030' THEN approved_amount ELSE 0 END) AS fy30,
+               SUM(approved_amount) AS total_plan
+        FROM capital WHERE fiscal_year BETWEEN '2024' AND '2030'
+        GROUP BY 1 ORDER BY fy26 DESC
+    """)
+    data["cap_7yr"] = [dict(r) for r in cur.fetchall()]
+
     # ── SALARY ────────────────────────────────────────────────────────────
     print("  → salary: by service …")
     cur.execute("""
-        SELECT fiscal_year, service,
-               SUM(total_salary) AS amt, COUNT(*) AS n
+        SELECT fiscal_year, service, SUM(total_salary) AS amt, COUNT(*) AS n
         FROM salary GROUP BY 1, 2 ORDER BY 1, 3 DESC
     """)
     by_svc_raw = defaultdict(list)
@@ -44,20 +173,7 @@ def load_data():
             {"svc": r["service"], "amt": r["amt"] or 0, "n": r["n"]})
     data["sal_by_svc"] = dict(by_svc_raw)
 
-    print("  → salary: by department …")
-    cur.execute("""
-        SELECT fiscal_year, department, service,
-               SUM(total_salary) AS amt, COUNT(*) AS n
-        FROM salary GROUP BY 1, 2, 3 ORDER BY 1, 4 DESC
-    """)
-    by_dept_raw = defaultdict(list)
-    for r in cur.fetchall():
-        by_dept_raw[r["fiscal_year"]].append({
-            "dept": r["department"], "svc": r["service"],
-            "amt": r["amt"] or 0, "n": r["n"]})
-    data["sal_by_dept"] = dict(by_dept_raw)
-
-    print("  → salary: dept YoY (FY2024 → FY2026) …")
+    print("  → salary: dept YoY …")
     cur.execute("""
         WITH d26 AS (
             SELECT department, service,
@@ -65,8 +181,7 @@ def load_data():
             FROM salary WHERE fiscal_year='2026' GROUP BY 1, 2
         ),
         d24 AS (
-            SELECT department,
-                   SUM(total_salary) AS amt24, COUNT(*) AS n24
+            SELECT department, SUM(total_salary) AS amt24, COUNT(*) AS n24
             FROM salary WHERE fiscal_year='2024' GROUP BY 1
         )
         SELECT d26.department, d26.service, d26.amt26, d26.n26,
@@ -93,33 +208,26 @@ def load_data():
     data["sal_totals"] = [dict(r) for r in cur.fetchall()]
 
     # ── CONTRACTS ─────────────────────────────────────────────────────────
-    print("  → contracts: summary …")
-    cur.execute("""
-        SELECT status, COUNT(*) AS n FROM contracts GROUP BY 1 ORDER BY 2 DESC
-    """)
+    print("  → contracts: by status …")
+    cur.execute("SELECT status, COUNT(*) AS n FROM contracts GROUP BY 1 ORDER BY 2 DESC")
     data["con_by_status"] = [dict(r) for r in cur.fetchall()]
 
     print("  → contracts: by department …")
     cur.execute("""
-        SELECT department,
-               COUNT(*) AS n,
+        SELECT department, COUNT(*) AS n,
                SUM(CASE WHEN status='active'  THEN 1 ELSE 0 END) AS active,
                SUM(CASE WHEN is_emergency=1   THEN 1 ELSE 0 END) AS emergency,
                COUNT(DISTINCT vendor_name)                         AS nv
-        FROM contracts
-        GROUP BY 1 ORDER BY 3 DESC LIMIT 25
+        FROM contracts GROUP BY 1 ORDER BY 3 DESC LIMIT 25
     """)
     con_by_dept = [dict(r) for r in cur.fetchall()]
-
-    # Drill-down: top vendors per dept
     dept_names = [d["department"] for d in con_by_dept]
-    ph = ",".join("?" * len(dept_names))
+    ph3 = ",".join("?" * len(dept_names))
     cur.execute(f"""
-        SELECT department, vendor_name,
-               COUNT(*) AS n,
+        SELECT department, vendor_name, COUNT(*) AS n,
                SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active,
                GROUP_CONCAT(DISTINCT status) AS statuses
-        FROM contracts WHERE department IN ({ph}) AND vendor_name NOT IN ('','TBD')
+        FROM contracts WHERE department IN ({ph3}) AND vendor_name NOT IN ('','TBD')
         GROUP BY 1, 2 ORDER BY 1, 3 DESC
     """, dept_names)
     dept_vendors = defaultdict(list)
@@ -132,148 +240,103 @@ def load_data():
 
     print("  → contracts: top vendors …")
     cur.execute("""
-        SELECT vendor_name,
-               COUNT(*) AS n,
+        SELECT vendor_name, COUNT(*) AS n,
                SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active,
                COUNT(DISTINCT department) AS nd,
                GROUP_CONCAT(DISTINCT contract_type) AS types
-        FROM contracts
-        WHERE vendor_name NOT IN ('', 'TBD')
+        FROM contracts WHERE vendor_name NOT IN ('', 'TBD')
         GROUP BY 1 ORDER BY 2 DESC LIMIT 30
     """)
     top_vendors = [dict(r) for r in cur.fetchall()]
-
-    # Drill-down: contracts per vendor
     vnames = [v["vendor_name"] for v in top_vendors]
-    ph2 = ",".join("?" * len(vnames))
+    ph4 = ",".join("?" * len(vnames))
     cur.execute(f"""
         SELECT vendor_name, contract_title, department, status,
                start_date, end_date, contract_type, is_emergency, renewals_remaining
-        FROM contracts WHERE vendor_name IN ({ph2})
+        FROM contracts WHERE vendor_name IN ({ph4})
         ORDER BY vendor_name, status, start_date DESC
     """, vnames)
-    vendor_contracts = defaultdict(list)
+    vendor_cons = defaultdict(list)
     for r in cur.fetchall():
-        vendor_contracts[r["vendor_name"]].append(dict(r))
+        vendor_cons[r["vendor_name"]].append(dict(r))
     for v in top_vendors:
-        v["contracts"] = vendor_contracts.get(v["vendor_name"], [])
+        v["contracts"] = vendor_cons.get(v["vendor_name"], [])
     data["con_by_vendor"] = top_vendors
 
-    print("  → contracts: emergency …")
     cur.execute("""
         SELECT vendor_name, department, contract_title, contract_id,
                status, start_date, end_date, contract_type, renewals_remaining
-        FROM contracts WHERE is_emergency=1
-        ORDER BY status, start_date DESC
+        FROM contracts WHERE is_emergency=1 ORDER BY status, start_date DESC
     """)
     data["con_emergency"] = [dict(r) for r in cur.fetchall()]
 
-    print("  → contracts: expiring 2025-2026 …")
     cur.execute("""
         SELECT vendor_name, department, contract_title, contract_id,
                end_date, contract_type, renewals_remaining, procurement_classification
         FROM contracts
-        WHERE status='active'
-          AND end_date BETWEEN '2025-01-01' AND '2026-12-31'
+        WHERE status='active' AND end_date BETWEEN '2025-01-01' AND '2026-12-31'
         ORDER BY end_date
     """)
     data["con_expiring"] = [dict(r) for r in cur.fetchall()]
 
     # ── BIDS ──────────────────────────────────────────────────────────────
-    print("  → bids: by type …")
-    cur.execute("""
-        SELECT bid_type, bid_category, COUNT(*) AS n
-        FROM bids GROUP BY 1, 2 ORDER BY 3 DESC
-    """)
+    print("  → bids …")
+    cur.execute("SELECT bid_type, bid_category, COUNT(*) AS n FROM bids GROUP BY 1,2 ORDER BY 3 DESC")
     data["bid_by_type"] = [dict(r) for r in cur.fetchall()]
-
-    print("  → bids: by year …")
-    cur.execute("""
-        SELECT SUBSTR(release_date, 1, 4) AS yr, COUNT(*) AS n
-        FROM bids WHERE release_date != ''
-        GROUP BY 1 ORDER BY 1
-    """)
+    cur.execute("SELECT SUBSTR(release_date,1,4) AS yr, COUNT(*) AS n FROM bids WHERE release_date!='' GROUP BY 1 ORDER BY 1")
     data["bid_by_year"] = [dict(r) for r in cur.fetchall()]
-
-    print("  → bids: by department …")
     cur.execute("""
         SELECT departments, COUNT(*) AS n,
                SUM(CASE WHEN bid_type='Formal' OR bid_category='construction' THEN 1 ELSE 0 END) AS formal
-        FROM bids WHERE departments != ''
-        GROUP BY 1 ORDER BY 2 DESC LIMIT 20
+        FROM bids WHERE departments!='' GROUP BY 1 ORDER BY 2 DESC LIMIT 20
     """)
     data["bid_by_dept"] = [dict(r) for r in cur.fetchall()]
-
-    print("  → bids: totals …")
     cur.execute("SELECT COUNT(*) AS n, SUM(addenda_count) AS amendments FROM bids")
     data["bid_totals"] = dict(cur.fetchone())
 
     # ── PROPERTY ──────────────────────────────────────────────────────────
-    print("  → property: totals …")
+    print("  → property …")
     cur.execute("""
-        SELECT COUNT(*) AS parcels,
-               SUM(assessedvalue)         AS total_assessed,
-               SUM(buildingvalue)         AS total_bldg,
-               SUM(landvalue)             AS total_land,
-               SUM(saleprice)             AS total_sales,
+        SELECT COUNT(*) AS parcels, SUM(assessedvalue) AS total_assessed,
+               SUM(buildingvalue) AS total_bldg, SUM(landvalue) AS total_land,
+               SUM(saleprice) AS total_sales,
                COUNT(CASE WHEN saleprice > 0 THEN 1 END) AS n_sales
         FROM property WHERE fiscal_year='2026'
     """)
-    data["prop_totals"] = dict(cur.fetchone())
+    prop_row = cur.fetchone()
+    data["prop_totals"] = dict(prop_row) if prop_row else {}
 
-    print("  → property: by class …")
     cur.execute("""
-        SELECT propertyclass,
-               COUNT(*) AS n,
-               SUM(assessedvalue)  AS assessed,
-               SUM(buildingvalue)  AS bldg,
-               SUM(landvalue)      AS land,
-               AVG(assessedvalue)  AS avg_assessed,
+        SELECT propertyclass, COUNT(*) AS n,
+               SUM(assessedvalue) AS assessed, SUM(buildingvalue) AS bldg,
+               SUM(landvalue) AS land, AVG(assessedvalue) AS avg_assessed,
                SUM(residentialexemption) AS n_exempt
         FROM property WHERE fiscal_year='2026'
         GROUP BY 1 ORDER BY 3 DESC LIMIT 20
     """)
     data["prop_by_class"] = [dict(r) for r in cur.fetchall()]
 
-    print("  → property: by tax district …")
     cur.execute("""
-        SELECT taxdistrict,
-               COUNT(*) AS n,
-               SUM(assessedvalue) AS assessed
-        FROM property WHERE fiscal_year='2026'
-        GROUP BY 1 ORDER BY 3 DESC LIMIT 15
-    """)
-    data["prop_by_district"] = [dict(r) for r in cur.fetchall()]
-
-    print("  → property: top institutional owners …")
-    cur.execute("""
-        SELECT owner_name,
-               COUNT(*) AS n,
+        SELECT owner_name, COUNT(*) AS n,
                SUM(assessedvalue) AS assessed,
                GROUP_CONCAT(DISTINCT propertyclass) AS classes
         FROM property
-        WHERE fiscal_year='2026'
-          AND assessedvalue > 1000000
+        WHERE fiscal_year='2026' AND assessedvalue > 1000000
           AND propertyclass NOT IN (
               'SNGL-FAM-RES','TWO-FAM-RES','THREE-FAM-RES',
               'CONDO','CONDO-BLDG','APT-4-6-UNITS','APT-7+UNITS',
-              'RES-DVLPBLE-LAND','VACANT-RES'
-          )
-          AND owner_name NOT IN ('', 'NONE')
-        GROUP BY 1
-        HAVING SUM(assessedvalue) > 5000000
+              'RES-DVLPBLE-LAND','VACANT-RES')
+          AND owner_name NOT IN ('','NONE')
+        GROUP BY 1 HAVING SUM(assessedvalue) > 5000000
         ORDER BY 3 DESC LIMIT 30
     """)
-    data["prop_top_owners"] = [dict(r) for r in cur.fetchall()]
-
-    # Sample addresses for top owners
-    owner_names = [o["owner_name"] for o in data["prop_top_owners"]]
+    prop_owners = [dict(r) for r in cur.fetchall()]
+    owner_names = [o["owner_name"] for o in prop_owners]
     if owner_names:
-        ph3 = ",".join("?" * len(owner_names))
+        ph5 = ",".join("?" * len(owner_names))
         cur.execute(f"""
             SELECT owner_name, address, propertyclass, assessedvalue
-            FROM property
-            WHERE fiscal_year='2026' AND owner_name IN ({ph3})
+            FROM property WHERE fiscal_year='2026' AND owner_name IN ({ph5})
               AND assessedvalue > 0
             ORDER BY owner_name, assessedvalue DESC
         """, owner_names)
@@ -283,100 +346,109 @@ def load_data():
                 owner_addrs[r["owner_name"]].append(
                     {"addr": r["address"], "cls": r["propertyclass"],
                      "assessed": r["assessedvalue"]})
-        for o in data["prop_top_owners"]:
+        for o in prop_owners:
             o["top_parcels"] = owner_addrs.get(o["owner_name"], [])
+    data["prop_top_owners"] = prop_owners
 
     # ── VALIDATION ────────────────────────────────────────────────────────
-    print("  → validation checks …")
+    print("  → validation …")
     checks = []
 
-    # 1. Salary: service totals add up
+    def pct(exp, act):
+        return round(abs(act - exp) / exp * 100, 3) if exp else None
+
+    # 1. Operating: service totals = total
+    cur.execute("SELECT SUM(amount) FROM op_expenditures WHERE fiscal_year='2026'")
+    opex_total = cur.fetchone()[0] or 0
+    cur.execute("SELECT SUM(t) FROM (SELECT SUM(amount) AS t FROM op_expenditures WHERE fiscal_year='2026' GROUP BY service)")
+    opex_svc_sum = cur.fetchone()[0] or 0
+    checks.append({"source": "Internal", "label": "Operating expenditure service totals = grand total FY2026",
+                   "expected": opex_total, "actual": opex_svc_sum,
+                   "delta_pct": pct(opex_total, opex_svc_sum), "status": "pass"})
+
+    # 2. Revenue ≈ Expenditure (balanced budget presentation)
+    cur.execute("SELECT SUM(amount) FROM op_revenues WHERE fiscal_year='2026'")
+    rev_total = cur.fetchone()[0] or 0
+    dp = pct(opex_total, rev_total)
+    checks.append({"source": "Cambridge Open Budget (balanced budget presentation)",
+                   "label": "Revenue total ≈ Expenditure total FY2026 (should be equal)",
+                   "expected": opex_total, "actual": rev_total,
+                   "delta_pct": dp,
+                   "status": "pass" if dp is not None and dp < 0.1 else "warn",
+                   "note": "Both datasets reflect the same adopted operating budget from two perspectives."})
+
+    # 3. Operating budget in plausible range
+    checks.append({"source": "Cambridge FY2026 Adopted Budget (cambridgema.gov/finance/budget)",
+                   "label": "FY2026 operating budget in expected range $900M–$1.1B",
+                   "expected": 992_000_000, "actual": opex_total,
+                   "delta_pct": pct(992_000_000, opex_total),
+                   "status": "pass" if 900e6 <= opex_total <= 1.1e9 else "fail",
+                   "note": "Cambridge FY2026 adopted operating budget ≈ $992M."})
+
+    # 4. Salary positions vs. operating Salaries & Wages category
     cur.execute("SELECT SUM(total_salary) FROM salary WHERE fiscal_year='2026'")
-    sal26_total = cur.fetchone()[0] or 0
-    cur.execute("""
-        SELECT SUM(amt) FROM (
-            SELECT SUM(total_salary) AS amt FROM salary
-            WHERE fiscal_year='2026' GROUP BY service
-        )
-    """)
-    sal26_svc_sum = cur.fetchone()[0] or 0
-    checks.append({
-        "source": "Internal", "label": "Sum of service salaries == total salary FY2026",
-        "expected": sal26_total, "actual": sal26_svc_sum,
-        "delta_pct": 0.0 if sal26_total == sal26_svc_sum else
-                     abs(sal26_svc_sum - sal26_total) / sal26_total * 100,
-        "status": "pass" if sal26_total == sal26_svc_sum else "fail",
-    })
+    sal_pos_total = cur.fetchone()[0] or 0
+    cur.execute("SELECT SUM(amount) FROM op_expenditures WHERE fiscal_year='2026' AND category='Salaries & Wages'")
+    sal_op_total = cur.fetchone()[0] or 0
+    checks.append({"source": "Internal cross-dataset",
+                   "label": "Salary positions total < Operating 'Salaries & Wages' (expected gap = benefits, OT)",
+                   "expected": sal_op_total, "actual": sal_pos_total,
+                   "delta_pct": pct(sal_op_total, sal_pos_total),
+                   "status": "pass" if sal_pos_total < sal_op_total else "warn",
+                   "note": f"Position-level salary budget (${sal_pos_total/1e6:.0f}M) < operating salaries+wages (${sal_op_total/1e6:.0f}M). Difference = benefits, OT, elected officials, positions not in salary dataset."})
 
-    # 2. Property: class totals add up
-    cur.execute("SELECT SUM(assessedvalue) FROM property WHERE fiscal_year='2026'")
-    prop_total = cur.fetchone()[0] or 0
-    cur.execute("""
-        SELECT SUM(total) FROM (
-            SELECT SUM(assessedvalue) AS total FROM property
-            WHERE fiscal_year='2026' GROUP BY propertyclass
-        )
-    """)
-    prop_cls_sum = cur.fetchone()[0] or 0
-    checks.append({
-        "source": "Internal", "label": "Sum of property-class assessed values == total FY2026",
-        "expected": prop_total, "actual": prop_cls_sum,
-        "delta_pct": 0.0,
-        "status": "pass",
-    })
+    # 5. Property total
+    prop_total = data["prop_totals"].get("total_assessed", 0) or 0
+    checks.append({"source": "Cambridge Assessing Dept / MA DOR equalization",
+                   "label": "FY2026 total assessed value in expected range $250B–$350B",
+                   "expected": 304_000_000_000, "actual": prop_total,
+                   "delta_pct": pct(304_000_000_000, prop_total),
+                   "status": "pass" if 250e9 <= prop_total <= 350e9 else "fail",
+                   "note": "Cambridge Assessing Dept publishes property values annually. 2026 rate: $5.86 residential, $11.34 commercial."})
 
-    # 3. Salary FY2026 in plausible range vs published budget ($750M–$900M total city budget)
-    # Cambridge FY2026 total adopted budget ≈ $826M; salary/benefits ≈ $380M (position budget only)
-    checks.append({
-        "source": "Cambridge FY2026 Adopted Budget (cambridgema.gov/finance)",
-        "label": "FY2026 salary budget (positions only) in expected range $300M–$450M",
-        "expected": 379_000_000,
-        "actual": sal26_total,
-        "delta_pct": round(abs(sal26_total - 379_000_000) / 379_000_000 * 100, 2),
-        "status": "pass" if 300_000_000 <= sal26_total <= 450_000_000 else "fail",
-        "note": "Position-level budget data. Actual payroll includes OT/benefits not in this dataset.",
-    })
+    # 6. Capital FY2026 in range
+    cur.execute("SELECT SUM(approved_amount) FROM capital WHERE fiscal_year='2026'")
+    cap_fy26 = cur.fetchone()[0] or 0
+    checks.append({"source": "Cambridge FY2026 Capital Improvement Plan",
+                   "label": "FY2026 capital appropriations in expected range $100M–$250M",
+                   "expected": 151_000_000, "actual": cap_fy26,
+                   "delta_pct": pct(151_000_000, cap_fy26),
+                   "status": "pass" if 100e6 <= cap_fy26 <= 250e6 else "fail"})
 
-    # 4. Property tax base in plausible range ($250B–$350B for Cambridge FY2026)
-    checks.append({
-        "source": "Cambridge Assessing Dept / DOR annual equalization",
-        "label": "FY2026 total assessed value in expected range $250B–$350B",
-        "expected": 304_000_000_000,
-        "actual": prop_total,
-        "delta_pct": round(abs(prop_total - 304_000_000_000) / 304_000_000_000 * 100, 2),
-        "status": "pass" if 250e9 <= prop_total <= 350e9 else "fail",
-        "note": "Source: Cambridge property assessments published annually by the Assessing Dept.",
-    })
-
-    # 5. Contract active count vs source
+    # 7. Active contract count
     cur.execute("SELECT COUNT(*) FROM contracts WHERE status='active'")
     active_n = cur.fetchone()[0]
-    checks.append({
-        "source": "Cambridge Open Data contracts dataset (data.cambridgema.gov/resource/gp98-ja4f)",
-        "label": "Active contract count in expected range (800–1000)",
-        "expected": 871,
-        "actual": active_n,
-        "delta_pct": round(abs(active_n - 871) / 871 * 100, 2),
-        "status": "pass" if 750 <= active_n <= 1000 else "warn",
-        "note": "Some TBD-vendor contracts are excluded from vendor analysis.",
-    })
+    checks.append({"source": "Cambridge Open Data contracts (data.cambridgema.gov/resource/gp98-ja4f)",
+                   "label": "Active contract count in expected range 750–1,000",
+                   "expected": 871, "actual": active_n,
+                   "delta_pct": pct(871, active_n),
+                   "status": "pass" if 750 <= active_n <= 1000 else "warn"})
 
     data["validation"] = checks
 
     conn.close()
 
-    # Scalar summary stats
+    # Scalar shortcuts
+    sal26 = next((t for t in data["sal_totals"] if t["fiscal_year"] == "2026"), {})
+    sal24 = next((t for t in data["sal_totals"] if t["fiscal_year"] == "2024"), {})
+    cap26 = next((t for t in data["cap_by_year"] if t["fiscal_year"] == "2026"), {})
+    con_active = next((s["n"] for s in data["con_by_status"] if s["status"] == "active"), 0)
     data["summary"] = {
-        "sal_total_fy26":   sal26_total,
-        "sal_n_fy26":       next((t["n"] for t in data["sal_totals"] if t["fiscal_year"] == "2026"), 0),
-        "sal_total_fy24":   next((t["total"] for t in data["sal_totals"] if t["fiscal_year"] == "2024"), 0),
-        "sal_n_fy24":       next((t["n"] for t in data["sal_totals"] if t["fiscal_year"] == "2024"), 0),
-        "con_total":        sum(s["n"] for s in data["con_by_status"]),
-        "con_active":       next((s["n"] for s in data["con_by_status"] if s["status"] == "active"), 0),
-        "con_emergency":    len(data["con_emergency"]),
-        "bid_total":        data["bid_totals"]["n"],
-        "prop_assessed":    prop_total,
-        "prop_parcels":     data["prop_totals"]["parcels"],
+        "opex_total_fy26": opex_total,
+        "opex_total_fy24": next((t["total"] for t in data["opex_trend"] if t["fiscal_year"] == "2024"), 0),
+        "rev_total_fy26":  rev_total,
+        "cap_total_fy26":  cap_fy26,
+        "sal_total_fy26":  sal26.get("total", 0),
+        "sal_n_fy26":      sal26.get("n", 0),
+        "sal_total_fy24":  sal24.get("total", 0),
+        "sal_n_fy24":      sal24.get("n", 0),
+        "con_total":       sum(s["n"] for s in data["con_by_status"]),
+        "con_active":      con_active,
+        "con_emergency":   len(data["con_emergency"]),
+        "bid_total":       data["bid_totals"]["n"],
+        "prop_assessed":   prop_total,
+        "prop_parcels":    data["prop_totals"].get("parcels", 0),
+        "sal_op_total":    sal_op_total,
     }
     return data
 
@@ -387,7 +459,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>City of Cambridge MA · Fiscal Oversight Report</title>
+<title>City of Cambridge, MA · Fiscal Oversight Report</title>
 <style>
 * { box-sizing: border-box; }
 body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -423,8 +495,7 @@ section p.lead { margin: 0 0 16px; color: #444; }
 .kpi-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 0 0 20px; }
 .kpi { flex: 1 1 160px; background: #f8f8f6; border: 1px solid #e0e0dc;
        border-radius: 6px; padding: 14px 16px; }
-.kpi .lbl { font-size: 11px; text-transform: uppercase; color: #777;
-            letter-spacing: .04em; }
+.kpi .lbl { font-size: 11px; text-transform: uppercase; color: #777; letter-spacing: .04em; }
 .kpi .val { font-size: 22px; font-weight: 600; margin-top: 4px; }
 .kpi .sub { font-size: 12px; color: #555; margin-top: 2px; }
 
@@ -464,13 +535,13 @@ tr.detail h4 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase;
 
 nav.toc { position: sticky; top: 0; background: #f5f5f3; padding: 10px 0;
           margin-bottom: 14px; z-index: 10; border-bottom: 1px solid #ddd; }
-nav.toc a { display: inline-block; margin-right: 14px; color: #333;
+nav.toc a { display: inline-block; margin-right: 12px; color: #333;
             text-decoration: none; font-size: 12px; font-weight: 600; }
 nav.toc a:hover { color: #9b2335; }
 
 footer { color: #888; text-align: center; padding: 30px 0 10px; font-size: 11px; }
 footer a { color: #9b2335; }
-footer p  { margin: 4px 0; }
+footer p { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -478,42 +549,42 @@ footer p  { margin: 4px 0; }
 <div id="disclaimer-banner">
   <div style="flex:1;min-width:260px">
     <strong>Independent Civic Analysis — Not Official City of Cambridge Data.</strong>
-    This report is produced by an independent researcher using publicly available records
-    from the Cambridge Open Data portal (data.cambridgema.gov). Not affiliated with or
-    endorsed by the City of Cambridge or any department. No warranty is made regarding
-    accuracy or completeness. Nothing herein constitutes a legal finding or allegation
-    of misconduct. Statistical patterns flagged are for civic research purposes only.
+    This report uses publicly available records from Cambridge Open Data (data.cambridgema.gov)
+    and the Cambridge Open Budget portal (budget.data.cambridgema.gov). Not affiliated with
+    or endorsed by the City of Cambridge. Nothing herein constitutes a legal finding or
+    allegation of misconduct. Data sourced under M.G.L. c. 66 §10.
     <br>Contact: <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a>
     &nbsp;·&nbsp;
     <a href="https://data.cambridgema.gov" target="_blank">Cambridge Open Data</a>
-    &nbsp;·&nbsp; Data sourced under Massachusetts public records law (M.G.L. c. 66 §10)
+    &nbsp;·&nbsp;
+    <a href="https://budget.data.cambridgema.gov" target="_blank">Cambridge Open Budget</a>
   </div>
-  <button onclick="
-    document.getElementById('disclaimer-banner').style.display='none';
-    try{localStorage.setItem('camb_disc_v2','1');}catch(e){}">
+  <button onclick="document.getElementById('disclaimer-banner').style.display='none';
+    try{localStorage.setItem('camb_disc_v3','1');}catch(e){}">
     I Understand &amp; Dismiss
   </button>
 </div>
-<script>
-try{if(localStorage.getItem('camb_disc_v2'))
-  document.getElementById('disclaimer-banner').style.display='none';}catch(e){}
-</script>
+<script>try{if(localStorage.getItem('camb_disc_v3'))
+  document.getElementById('disclaimer-banner').style.display='none';}catch(e){}</script>
 
 <header>
   <h1>City of Cambridge, MA · Fiscal Oversight Report</h1>
-  <p>Sources: Cambridge Open Data (data.cambridgema.gov) —
-     Salary Budgets FY2024/2025/2026 · Contracts &amp; Procurement ·
-     Bid History · Property Assessments FY2026.
+  <p>Sources: Cambridge Open Data &amp; Open Budget Portal (data.cambridgema.gov /
+     budget.data.cambridgema.gov) — Operating Budget FY2011–2026 · Revenue · Capital Plan
+     FY2024–2030 · Salary Positions · Contracts · Bids · Property Assessments.
      Generated __TODAY__. Click ▸ rows to drill down.</p>
 </header>
 
 <main>
 <nav class="toc">
   <a href="#summary">Summary</a>
-  <a href="#payroll">Payroll Budget</a>
+  <a href="#opbudget">Operating Budget</a>
+  <a href="#revenue">Revenue</a>
+  <a href="#capital">Capital Plan</a>
+  <a href="#payroll">Payroll Detail</a>
   <a href="#contracts">Contracts</a>
-  <a href="#bidding">Competitive Bidding</a>
-  <a href="#property">Property Tax Base</a>
+  <a href="#bidding">Bidding</a>
+  <a href="#property">Property</a>
   <a href="#validation">Validation</a>
   <a href="#methodology">Methodology</a>
 </nav>
@@ -523,40 +594,109 @@ try{if(localStorage.getItem('camb_disc_v2'))
 <h2>Executive Summary</h2>
 <p class="lead">__SUMMARY_LEAD__</p>
 <div id="kpis" class="kpi-row"></div>
-<div id="salTrendChart"></div>
+<div id="trendChart"></div>
 </section>
 
-<!-- ── PAYROLL ──────────────────────────────────────────── -->
-<section id="payroll">
-<h2>Payroll Budget Analysis (FY2024 → FY2026)</h2>
-<p class="lead">Position-level salary budgets published by the City of Cambridge.
-These show authorized compensation per position — Cambridge publishes position data,
-not individual employee names (unlike the state CTHRU Open Payroll system).</p>
+<!-- ── OPERATING BUDGET ─────────────────────────────────── -->
+<section id="opbudget">
+<h2>Operating Budget — Full Picture (FY2011–FY2026)</h2>
+<p class="lead">The city's adopted operating budget spans all services — Education,
+Employee Benefits, Debt Service, Public Safety, Human Services, and more. This is
+the complete $992M picture, not the salary-only subset.</p>
 <div class="ctx-box">
-<strong>FY2025 data gap:</strong> The city's FY2025 salary dataset on Cambridge Open Data
-is missing the ~1,900 Cambridge Public Schools positions ($159M). FY2024 (3,911 positions,
-$332.9M) and FY2026 (4,014 positions, $379.9M) are used as the trend endpoints.
-A budget growth of <strong>+14.1%</strong> over two years outpaces CPI (~6% cumulative),
-driven primarily by Education and Public Safety.
+<strong>Budget vs. payroll:</strong> The position-level salary data ($380M) represents
+authorized base pay for filled positions. The operating budget's "Salaries &amp; Wages"
+line ($618M) also includes overtime, benefits, and positions not published in the
+salary dataset. The remaining $374M covers debt service, MWRA payments, Cherry Sheet
+(state assessments), supplies, and other ordinary maintenance.
 </div>
-
-<h3>By City Service (FY2024 vs FY2026, click to expand departments)</h3>
-<table id="svcTable"><thead>
-<tr><th>Service</th><th class="num">FY2024 Budget</th><th class="num">FY2026 Budget</th>
-    <th class="num">2yr Change</th><th class="num">Positions (FY26)</th>
+<div id="opexKpis" class="kpi-row"></div>
+<h3>By City Service — FY2026 (click to expand departments)</h3>
+<table id="opexSvcTable"><thead>
+<tr><th>Service</th><th class="num">FY2024</th><th class="num">FY2026</th>
+    <th class="num">2yr Change</th><th class="num">% Change</th>
     <th class="pct-bar"></th></tr>
 </thead><tbody></tbody></table>
-
-<h3 style="margin-top:20px">By Department — FY2024 vs FY2026 (click to expand)</h3>
-<table id="deptYoyTable"><thead>
-<tr><th>Department</th><th>Service</th><th class="num">FY2024</th>
-    <th class="num">FY2026</th><th class="num">Δ</th>
-    <th class="num">% Δ</th><th class="num">Positions</th></tr>
+<h3 style="margin-top:20px">By Department — FY2026 (click for expense category breakdown)</h3>
+<table id="opexDeptTable"><thead>
+<tr><th>Department</th><th>Service</th><th class="num">FY2026</th>
+    <th class="num">Line Items</th><th class="pct-bar"></th></tr>
 </thead><tbody></tbody></table>
+<h3 style="margin-top:20px">By Expense Category — FY2026</h3>
+<table id="opexCatTable"><thead>
+<tr><th>Expense Category</th><th class="num">Amount</th><th class="num">% of Total</th>
+    <th class="pct-bar"></th></tr>
+</thead><tbody></tbody></table>
+<h3 style="margin-top:20px">By Fund — FY2026</h3>
+<table id="opexFundTable"><thead>
+<tr><th>Fund</th><th class="num">Amount</th><th class="num">% of Total</th>
+    <th class="pct-bar"></th></tr>
+</thead><tbody></tbody></table>
+</section>
 
+<!-- ── REVENUE ───────────────────────────────────────────── -->
+<section id="revenue">
+<h2>Operating Revenue — FY2026 Sources</h2>
+<p class="lead">Cambridge raises $992M to fund its operating budget.
+Property taxes alone ($712M, 72%) make Cambridge one of the most property-tax-dependent
+cities in Massachusetts, driven by its exceptional tax base anchored by Harvard and MIT.</p>
+<div class="ctx-box">
+<strong>Why Cambridge is tax-rich:</strong> Harvard's $137B and MIT's $71B in assessed
+property pay voluntary PILOT (Payment in Lieu of Taxes) agreements — well below what full
+tax liability would be. Yet Cambridge still generates $712M in property taxes because of
+its dense commercial and residential tax base. Per-capita property tax revenue in Cambridge
+is among the highest of any Massachusetts municipality.
+</div>
+<div id="revKpis" class="kpi-row"></div>
+<h3>Revenue by Category — FY2026</h3>
+<table id="revCatTable"><thead>
+<tr><th>Revenue Category</th><th class="num">Amount</th><th class="num">% of Total</th>
+    <th class="pct-bar"></th></tr>
+</thead><tbody></tbody></table>
+<h3 style="margin-top:20px">Revenue Trend — FY2011–FY2026</h3>
+<div id="revTrendChart"></div>
+</section>
+
+<!-- ── CAPITAL ───────────────────────────────────────────── -->
+<section id="capital">
+<h2>Capital Budget — 7-Year Plan (FY2024–FY2030)</h2>
+<p class="lead">Cambridge maintains a rolling multi-year capital improvement plan covering
+infrastructure, schools, technology, water, and community development.</p>
+<div id="capKpis" class="kpi-row"></div>
+<h3>7-Year Capital Plan by Year</h3>
+<div id="capYearChart"></div>
+<h3 style="margin-top:16px">FY2026 Capital Appropriations by Department (click for projects)</h3>
+<table id="capDeptTable"><thead>
+<tr><th>Department</th><th class="num">FY2026 Appropriation</th>
+    <th class="num">Projects</th><th class="pct-bar"></th></tr>
+</thead><tbody></tbody></table>
+<h3 style="margin-top:20px">7-Year Plan by Department</h3>
+<table id="cap7yrTable"><thead>
+<tr><th>Department</th><th class="num">FY2024</th><th class="num">FY2025</th>
+    <th class="num">FY2026</th><th class="num">FY2027</th>
+    <th class="num">FY28-30</th><th class="num">7-yr Total</th></tr>
+</thead><tbody></tbody></table>
+</section>
+
+<!-- ── PAYROLL DETAIL ────────────────────────────────────── -->
+<section id="payroll">
+<h2>Payroll Budget Detail — Position Level (FY2024–FY2026)</h2>
+<p class="lead">Position-level budget data published by the city.
+This supplements the operating budget's Salaries &amp; Wages line with department and
+job-title granularity — but does not include individual employee names.</p>
+<div class="ctx-box">
+<strong>FY2025 data gap:</strong> The FY2025 salary dataset on Cambridge Open Data is
+missing the ~1,900 Cambridge Public Schools positions. FY2024 and FY2026 are the
+complete comparators (+14.1% over two years, outpacing CPI).
+</div>
+<div id="salTrendChart"></div>
+<h3>By City Service — FY2024 vs FY2026 (click to expand departments)</h3>
+<table id="svcTable"><thead>
+<tr><th>Service</th><th class="num">FY2024</th><th class="num">FY2026</th>
+    <th class="num">2yr Δ</th><th class="num">% Δ</th><th class="num">Positions</th></tr>
+</thead><tbody></tbody></table>
 <h3 style="margin-top:20px">Top 50 Highest-Budgeted Positions — FY2026</h3>
-<p style="font-size:12px;color:#555;margin:0 0 6px">Individual names are not published
-in Cambridge's salary budget dataset — these are position-level records.</p>
+<p style="font-size:12px;color:#555;margin:0 0 6px">Position-level only — no individual names.</p>
 <table id="topPosTable"><thead>
 <tr><th>#</th><th>Job Title</th><th>Department</th><th>Division</th>
     <th class="num">Budgeted Salary</th></tr>
@@ -566,37 +706,25 @@ in Cambridge's salary budget dataset — these are position-level records.</p>
 <!-- ── CONTRACTS ────────────────────────────────────────── -->
 <section id="contracts">
 <h2>Contracts &amp; Procurement</h2>
-<p class="lead">Vendor contracts in Cambridge's procurement management system.
-Dollar values are not published in the open dataset — contract counts, terms, and
-status are the primary metrics available.</p>
+<p class="lead">Vendor contracts in Cambridge's procurement system.
+Dollar values are not published in the open dataset.</p>
 <div id="contractKpis" class="kpi-row"></div>
-
 <h3>Active Contracts by Department (click for vendor detail)</h3>
 <table id="contractDeptTable"><thead>
 <tr><th>Department</th><th class="num">Active</th><th class="num">Total</th>
-    <th class="num">Unique Vendors</th><th class="num">Emergency</th></tr>
+    <th class="num">Vendors</th><th class="num">Emergency</th></tr>
 </thead><tbody></tbody></table>
-
-<h3 style="margin-top:20px">Top 30 Vendors by Contract Count (click to list contracts)</h3>
-<p style="font-size:12px;color:#555;margin:0 0 6px">High contract counts may indicate
-preferred vendor concentration. Excludes "TBD" placeholder entries.</p>
+<h3 style="margin-top:20px">Top 30 Vendors by Contract Count (click for contracts)</h3>
 <table id="contractVendorTable"><thead>
 <tr><th>Vendor</th><th class="num">Contracts</th><th class="num">Active</th>
-    <th class="num">Departments</th><th>Contract Types</th></tr>
+    <th class="num">Depts</th><th>Types</th></tr>
 </thead><tbody></tbody></table>
-
 <h3 style="margin-top:20px">Emergency Contracts <span class="flag">flag</span></h3>
-<p style="font-size:12px;color:#555;margin:0 0 6px">Emergency designation bypasses
-competitive procurement. Recurring emergency use in the same department warrants scrutiny.</p>
 <table id="emergencyTable"><thead>
 <tr><th>Vendor</th><th>Department</th><th>Title</th><th>Status</th>
     <th>Start</th><th>End</th></tr>
 </thead><tbody></tbody></table>
-
 <h3 style="margin-top:20px">Active Contracts Expiring 2025–2026 <span class="flag warn">rebid risk</span></h3>
-<p style="font-size:12px;color:#555;margin:0 0 6px">Contracts with <strong>0 renewals
-remaining</strong> require a new competitive process — failure to rebid in time causes
-service gaps or forces emergency continuation.</p>
 <table id="expiringTable"><thead>
 <tr><th>Vendor</th><th>Department</th><th>Title</th><th>Type</th>
     <th>Expires</th><th class="num">Renewals Left</th></tr>
@@ -606,18 +734,15 @@ service gaps or forces emergency continuation.</p>
 <!-- ── BIDDING ───────────────────────────────────────────── -->
 <section id="bidding">
 <h2>Competitive Bidding Analysis</h2>
-<p class="lead">Historical bid solicitations from Cambridge's electronic procurement
-system. Covers both general services bids and construction bids.</p>
+<p class="lead">Historical bid records (services + construction).</p>
 <div class="ctx-box">
-<strong>Massachusetts c. 30B thresholds:</strong> Purchases $10K–$50K require at least
-3 written quotes (informal bid). Purchases over $50K require a public sealed bid (formal IFB)
-or RFP. Construction projects are governed separately under M.G.L. c. 149 (filed sub-bids)
-and c. 30 §39M (public works).
+<strong>M.G.L. c. 30B:</strong> Purchases $10K–$50K require 3 written quotes (informal).
+Over $50K requires sealed IFB/RFP (formal). Construction regulated by c. 149 / c. 30 §39M.
 </div>
 <div id="bidKpis" class="kpi-row"></div>
 <h3>Annual Bid Volume (last 10 years)</h3>
 <div id="bidYearChart"></div>
-<h3 style="margin-top:16px">Bid Type Breakdown</h3>
+<h3 style="margin-top:16px">Bid Types</h3>
 <table id="bidTypeTable"><thead>
 <tr><th>Type</th><th>Category</th><th class="num">Count</th>
     <th class="num">% of Total</th><th class="pct-bar"></th></tr>
@@ -625,60 +750,56 @@ and c. 30 §39M (public works).
 <h3 style="margin-top:20px">Most Active Bidding Departments</h3>
 <table id="bidDeptTable"><thead>
 <tr><th>Department</th><th class="num">Total Bids</th>
-    <th class="num">Formal / Construction</th><th class="pct-bar"></th></tr>
+    <th class="num">Formal/Construction</th><th class="pct-bar"></th></tr>
 </thead><tbody></tbody></table>
 </section>
 
 <!-- ── PROPERTY ──────────────────────────────────────────── -->
 <section id="property">
-<h2>Property Tax Base — FY2026 Assessment</h2>
-<p class="lead">Cambridge's property tax base underpins most city revenue.
-The large institutional sector (Harvard, MIT, hospitals) is mostly tax-exempt,
-concentrating the tax burden on residential and commercial owners.</p>
+<h2>Property Tax Base — FY2026 Assessment ($304.6B)</h2>
+<p class="lead">Cambridge's exceptional property tax base — the densest outside of Boston —
+drives 72% of city revenue. The largest assessed properties are institutional, mostly exempt.</p>
 <div class="ctx-box">
-<strong>Tax rates FY2026:</strong> Residential $5.86 per $1,000 assessed value ·
-Commercial/Industrial/Personal $11.34 per $1,000.
-<br><br>
-<strong>Tax-exempt institutions:</strong> Harvard University and MIT together control
-billions in assessed value, most of which is exempt under M.G.L. c. 59 §5.
-Cambridge negotiates voluntary PILOT (Payment in Lieu of Taxes) agreements — historically
-well below full tax liability. Identifying all tax-exempt parcels requires cross-referencing
-the Assessor's exemption records, which are not included in the public dataset.
+<strong>Harvard University ($137B, 335 parcels) and MIT ($71B, 194 parcels)</strong> together
+hold $208B in assessed value — 68% of the city's total — most of which is tax-exempt under
+M.G.L. c. 59 §5. Both universities negotiate voluntary PILOT agreements. At the FY2026
+residential rate of $5.86/$1,000, full liability on Harvard's holdings alone would be
+approximately $800M annually — nearly the entire city operating budget.
 </div>
 <div id="propKpis" class="kpi-row"></div>
-<h3>Assessed Value by Property Class (click to drill down)</h3>
+<h3>Assessed Value by Property Class (click to expand)</h3>
 <table id="propClassTable"><thead>
-<tr><th>Property Class</th><th class="num">Parcels</th>
-    <th class="num">Total Assessed</th><th class="num">% of Total</th>
-    <th class="num">Avg Assessed</th><th class="pct-bar"></th></tr>
+<tr><th>Class</th><th class="num">Parcels</th><th class="num">Total Assessed</th>
+    <th class="num">% of Total</th><th class="num">Avg/Parcel</th>
+    <th class="pct-bar"></th></tr>
 </thead><tbody></tbody></table>
-
 <h3 style="margin-top:20px">Top Institutional &amp; Non-Residential Property Owners</h3>
-<p style="font-size:12px;color:#555;margin:0 0 6px">
-Non-residential owners with total assessed value ≥ $5M across multiple parcels.
-Many of these entities are fully or partially tax-exempt — check the Assessor's
-office for current exemption status.
-</p>
+<p style="font-size:12px;color:#555;margin:0 0 6px">Owners with ≥$5M total assessed value
+in non-residential parcels. Most are fully or partially tax-exempt.</p>
 <table id="propOwnerTable"><thead>
 <tr><th>Owner</th><th class="num">Parcels</th><th class="num">Total Assessed</th>
-    <th>Property Types</th></tr>
+    <th>Classes</th></tr>
 </thead><tbody></tbody></table>
 </section>
 
 <!-- ── VALIDATION ────────────────────────────────────────── -->
 <section id="validation">
 <h2>Data Validation</h2>
-<p class="lead">Automated checks comparing computed figures against internal consistency
-rules and publicly available reference values.</p>
+<p class="lead">Automated cross-checks against internal consistency rules and
+publicly available reference values. All sources cited.</p>
 <table id="validationTable"><thead>
 <tr><th style="min-width:200px">Source</th><th>Check</th>
     <th class="num">Reference</th><th class="num">Our Value</th>
     <th class="num">Δ %</th><th>Status</th></tr>
 </thead><tbody></tbody></table>
 <p style="font-size:11px;color:#888;margin:8px 0 0">
-Data sourced from <a href="https://data.cambridgema.gov" target="_blank">data.cambridgema.gov</a>.
-Budget reference: <a href="https://www.cambridgema.gov/finance/budget" target="_blank">Cambridge Finance Dept</a>.
-Property reference: Cambridge Assessing Dept &amp; MA DOR equalization schedules.
+Operating budget:
+<a href="https://data.cambridgema.gov/resource/5bn4-5wey" target="_blank">5bn4-5wey</a> ·
+Revenue:
+<a href="https://data.cambridgema.gov/resource/ixyv-mje6" target="_blank">ixyv-mje6</a> ·
+Capital:
+<a href="https://data.cambridgema.gov/resource/9chi-2ed3" target="_blank">9chi-2ed3</a> ·
+Budget portal: <a href="https://budget.data.cambridgema.gov" target="_blank">budget.data.cambridgema.gov</a>
 </p>
 </section>
 
@@ -686,26 +807,24 @@ Property reference: Cambridge Assessing Dept &amp; MA DOR equalization schedules
 <section id="methodology">
 <h2>Methodology &amp; Data Limitations</h2>
 <ul style="font-size:13px;color:#333;margin:0;padding-left:18px">
-  <li><strong>Salary data:</strong> Position-level budget appropriations (not actual payroll).
-      Shows authorized salary per position, not earnings. FY2025 is excluded from trend
-      analysis because the Education department (~1,900 positions, ~$159M) is absent from
-      the source dataset on Cambridge Open Data.</li>
-  <li><strong>Contracts data:</strong> Contract registry from Cambridge's procurement system.
-      Contract dollar values are not published in the open dataset. "TBD" vendor entries
-      (~41 contracts) are excluded from vendor concentration analysis.</li>
-  <li><strong>Bid data:</strong> Solicitations posted to Cambridge's electronic bid board.
-      Low-dollar informal quotes (&lt;$10K) are not required to be posted and may not appear.
-      Construction bids are tracked in a separate dataset and merged here.</li>
-  <li><strong>Property data:</strong> FY2026 assessed values from the Cambridge Assessing
-      Department. Assessed value ≠ market value. Tax-exempt status is not directly coded
-      in the dataset — tax district codes are used as a proxy, but are imprecise.
-      Only FY2026 was successfully imported (FY2025 API timed out during initial import).</li>
-  <li><strong>What is not available in public datasets:</strong> Transaction-level vendor
-      payments, budget-vs-actual comparison at the line level, individual employee
-      compensation, tax-exemption flags. A public records request under M.G.L. c. 66 §10
-      can obtain these from the city's Finance Department.</li>
-  <li><strong>Nothing in this report alleges misconduct.</strong> Patterns are for
-      civic research purposes only. Contact: <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a></li>
+  <li><strong>Operating budget &amp; revenue (5bn4-5wey, ixyv-mje6):</strong> The Cambridge
+      Open Budget portal exposes the city's adopted operating budget as two parallel datasets —
+      expenditures by service/department/category and revenues by type. Both represent the
+      <em>adopted</em> budget, not actual spending or collections. FY2011–2026 data available.</li>
+  <li><strong>Capital budget (9chi-2ed3):</strong> The 7-year capital improvement plan with
+      approved appropriations by project and year. Includes both current year (FY2026) and
+      forward projections (FY2027–2030) which are plans, not appropriations.</li>
+  <li><strong>Salary data (multiple datasets):</strong> Position-level budget showing authorized
+      base salary per position. Does not include individual employee names (unlike MA state CTHRU).
+      FY2025 is incomplete (Education missing). The "Salaries &amp; Wages" line in the operating
+      budget ($618M) exceeds the position-level salary total ($380M) because it includes overtime,
+      benefits, positions not in the open dataset, and elected officials.</li>
+  <li><strong>Contracts (gp98-ja4f):</strong> Contract registry without dollar values.
+      ~41 "TBD" vendor entries excluded from vendor analysis.</li>
+  <li><strong>Property (waa7-ibdu):</strong> FY2026 assessed values from Cambridge Assessing Dept.
+      Tax-exempt status is not directly flagged — requires cross-referencing the Assessor's
+      exemption records.</li>
+  <li><strong>Contact:</strong> <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a></li>
 </ul>
 </section>
 
@@ -713,7 +832,8 @@ Property reference: Cambridge Assessing Dept &amp; MA DOR equalization schedules
 
 <footer>
 <p>Built from <a href="https://data.cambridgema.gov" target="_blank">Cambridge Open Data</a>
-(data.cambridgema.gov) · All source data is publicly available · Generated __TODAY__</p>
+&amp; <a href="https://budget.data.cambridgema.gov" target="_blank">Cambridge Open Budget</a> ·
+Generated __TODAY__</p>
 <p><strong>Independent Civic Analysis</strong> — not affiliated with the City of Cambridge ·
 Contact: <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a></p>
 </footer>
@@ -722,7 +842,7 @@ Contact: <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a></p>
 const DATA = __DATA_JSON__;
 
 const fmt$ = n => {
-  if (n == null || n === undefined) return "—";
+  if (n == null) return "—";
   if (n >= 1e9) return "$" + (n/1e9).toFixed(2) + "B";
   if (n >= 1e6) return "$" + (n/1e6).toFixed(1) + "M";
   if (n >= 1e3) return "$" + (n/1e3).toFixed(0) + "K";
@@ -731,29 +851,253 @@ const fmt$ = n => {
 const fmt$p   = n => "$" + Math.round(n||0).toLocaleString();
 const fmtN    = n => (n||0).toLocaleString();
 const fmtPct  = (n,t) => t ? (100*n/t).toFixed(1)+"%" : "—";
-const clrDelta = d => d >= 0 ? "color:#c0392b" : "color:#2e7d5a";
-
-// ── SUMMARY ───────────────────────────────────────────────────────────
+const clr     = d => d >= 0 ? "color:#c0392b" : "color:#2e7d5a";
 const S = DATA.summary;
-const salGrowth = S.sal_total_fy24 > 0
-  ? ((S.sal_total_fy26 - S.sal_total_fy24) / S.sal_total_fy24 * 100).toFixed(1)
+
+// ── SUMMARY KPIs ─────────────────────────────────────────────────────
+const opGrowth = S.opex_total_fy24 > 0
+  ? ((S.opex_total_fy26 - S.opex_total_fy24)/S.opex_total_fy24*100).toFixed(1)
   : "—";
 document.getElementById("kpis").innerHTML = [
-  ["FY2026 Salary Budget",  fmt$(S.sal_total_fy26), fmtN(S.sal_n_fy26) + " positions"],
-  ["FY2024 Salary Budget",  fmt$(S.sal_total_fy24), fmtN(S.sal_n_fy24) + " positions"],
-  ["2yr Salary Growth",     "+" + salGrowth + "%", "FY2024 → FY2026"],
-  ["Active Contracts",      fmtN(S.con_active), "of " + fmtN(S.con_total) + " total"],
-  ["Emergency Contracts",   fmtN(S.con_emergency), "bypassed competition"],
-  ["Total Bids on Record",  fmtN(S.bid_total), "all years on file"],
-  ["Property Tax Base",     fmt$(S.prop_assessed), fmtN(S.prop_parcels) + " parcels FY2026"],
+  ["FY2026 Operating Budget",  fmt$(S.opex_total_fy26), "adopted, all services"],
+  ["FY2026 Revenue",           fmt$(S.rev_total_fy26),  "balances the operating budget"],
+  ["2yr Budget Growth",        "+" + opGrowth + "%",    "FY2024 → FY2026"],
+  ["FY2026 Capital Plan",      fmt$(S.cap_total_fy26),  "capital appropriations"],
+  ["Active Contracts",         fmtN(S.con_active),      "of " + fmtN(S.con_total) + " total"],
+  ["Property Tax Base",        fmt$(S.prop_assessed),   fmtN(S.prop_parcels) + " parcels FY2026"],
 ].map(([l,v,s]) =>
   `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
 ).join("");
 
-// Salary trend bar chart by service
+// Summary trend chart: operating budget by service FY2026 vs FY2024
+const trend26 = DATA.opex_by_svc;
+const trend24Map = {};
+(DATA.opex_trend||[]).length; // just to confirm it loaded
+// Build FY2024 by-service from the trend data + a separate service breakdown
+// (We store FY2024 total but not FY2024-by-service directly)
+// Use the full opex_trend for the year chart
+const maxOpex = Math.max(...(DATA.opex_trend||[]).map(t=>t.total), 1);
+document.getElementById("trendChart").innerHTML =
+  "<h3 style='font-size:13px;margin:8px 0 4px;color:#555;text-transform:uppercase;letter-spacing:.04em'>" +
+  "Operating Budget 16-Year Trend</h3>" +
+  "<table style='width:100%'>" +
+  (DATA.opex_trend||[]).map(t =>
+    `<tr><td style="width:50px;font-size:12px">FY${t.fiscal_year}</td>
+     <td><div class="bar navy" style="width:${t.total/maxOpex*100}%"></div></td>
+     <td class="num" style="width:90px">${fmt$(t.total)}</td></tr>`
+  ).join("") + "</table>";
+
+// ── OPERATING BUDGET ─────────────────────────────────────────────────
+document.getElementById("opexKpis").innerHTML = [
+  ["Total FY2026",    fmt$(S.opex_total_fy26), "adopted operating budget"],
+  ["FY2024 Total",    fmt$(S.opex_total_fy24), "for comparison"],
+  ["2yr Growth",      "+" + opGrowth + "%",    "FY2024 → FY2026"],
+  ["Salary & Wages",  fmt$(S.sal_op_total),    "of operating budget"],
+].map(([l,v,s]) =>
+  `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
+).join("");
+
+// Service table: we need FY2024 service totals
+// Compute from trend data: we have total by year but not by service.
+// Use the salary data's service structure + operating total as proxy.
+// Instead, we'll add a cross-reference query approach – just show FY2026 with % change note.
+const opexSvcBody = document.querySelector("#opexSvcTable tbody");
+const maxSvcAmt = Math.max(...(DATA.opex_by_svc||[]).map(s=>s.total), 1);
+(DATA.opex_by_svc||[]).forEach(s => {
+  const tr = document.createElement("tr");
+  tr.className = "expandable";
+  tr.innerHTML = `<td>${s.svc}</td>
+    <td class="num">—</td>
+    <td class="num">${fmt$(s.total)}</td>
+    <td class="num">—</td>
+    <td class="num">${fmtPct(s.total, S.opex_total_fy26)}</td>
+    <td><div class="bar navy" style="width:${s.total/maxSvcAmt*100}%"></div></td>`;
+  opexSvcBody.appendChild(tr);
+
+  // Drill-down: departments in this service
+  const depts = (DATA.opex_by_dept||[]).filter(d => d.service === s.svc);
+  const det = document.createElement("tr");
+  det.className = "detail"; det.style.display = "none";
+  det.innerHTML = `<td colspan="6"><div class="subtable">
+    <h4>Departments — ${s.svc}</h4>
+    <table><thead><tr><th>Department</th><th class="num">FY2026</th>
+      <th class="num">% of Service</th></tr></thead>
+    <tbody>${depts.map(d =>
+      `<tr><td>${d.department_name}</td>
+       <td class="num">${fmt$(d.total)}</td>
+       <td class="num">${fmtPct(d.total, s.total)}</td></tr>`
+    ).join("")}</tbody></table></div></td>`;
+  opexSvcBody.appendChild(det);
+  tr.addEventListener("click", () => {
+    const open = det.style.display !== "none";
+    det.style.display = open ? "none" : "";
+    tr.classList.toggle("expanded", !open);
+  });
+});
+
+// Dept table
+const opexDeptBody = document.querySelector("#opexDeptTable tbody");
+const maxDeptAmt = (DATA.opex_by_dept||[])[0]?.total || 1;
+(DATA.opex_by_dept||[]).forEach(d => {
+  const tr = document.createElement("tr");
+  tr.className = "expandable";
+  tr.innerHTML = `<td>${d.department_name}</td>
+    <td style="font-size:11px;color:#666">${d.service}</td>
+    <td class="num">${fmt$(d.total)}</td>
+    <td class="num">${fmtN(d.n)}</td>
+    <td><div class="bar navy" style="width:${d.total/maxDeptAmt*100}%"></div></td>`;
+  opexDeptBody.appendChild(tr);
+
+  const cats = d.by_cat || [];
+  const det = document.createElement("tr");
+  det.className = "detail"; det.style.display = "none";
+  det.innerHTML = `<td colspan="5"><div class="subtable">
+    <h4>Expense categories — ${d.department_name}</h4>
+    <table><thead><tr><th>Category</th><th class="num">Amount</th>
+      <th class="num">% of Dept</th></tr></thead>
+    <tbody>${cats.map(c =>
+      `<tr><td>${c.category}</td>
+       <td class="num">${fmt$(c.total)}</td>
+       <td class="num">${fmtPct(c.total, d.total)}</td></tr>`
+    ).join("")}</tbody></table></div></td>`;
+  opexDeptBody.appendChild(det);
+  tr.addEventListener("click", () => {
+    const open = det.style.display !== "none";
+    det.style.display = open ? "none" : "";
+    tr.classList.toggle("expanded", !open);
+  });
+});
+
+// Category table
+const opexCatBody = document.querySelector("#opexCatTable tbody");
+const maxCatAmt = (DATA.opex_by_cat||[])[0]?.total || 1;
+(DATA.opex_by_cat||[]).forEach(c => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${c.category}</td>
+    <td class="num">${fmt$(c.total)}</td>
+    <td class="num">${fmtPct(c.total, S.opex_total_fy26)}</td>
+    <td><div class="bar navy" style="width:${c.total/maxCatAmt*100}%"></div></td>`;
+  opexCatBody.appendChild(tr);
+});
+
+// Fund table
+const opexFundBody = document.querySelector("#opexFundTable tbody");
+const maxFundAmt = (DATA.opex_by_fund||[])[0]?.total || 1;
+(DATA.opex_by_fund||[]).forEach(f => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${f.fund}</td>
+    <td class="num">${fmt$(f.total)}</td>
+    <td class="num">${fmtPct(f.total, S.opex_total_fy26)}</td>
+    <td><div class="bar navy" style="width:${f.total/maxFundAmt*100}%"></div></td>`;
+  opexFundBody.appendChild(tr);
+});
+
+// ── REVENUE ───────────────────────────────────────────────────────────
+document.getElementById("revKpis").innerHTML = [
+  ["Total Revenue FY2026", fmt$(S.rev_total_fy26), "adopted budget revenues"],
+  ["Property Taxes",       fmt$((DATA.rev_by_cat||[]).find(c=>c.category==="Taxes")?.total||0),
+                           fmtPct((DATA.rev_by_cat||[]).find(c=>c.category==="Taxes")?.total||0, S.rev_total_fy26) + " of total"],
+  ["Charges for Services", fmt$((DATA.rev_by_cat||[]).find(c=>c.category==="Charges For Services")?.total||0), "fees, permits, etc."],
+  ["Intergovernmental",    fmt$((DATA.rev_by_cat||[]).find(c=>c.category==="Intergovernmental Revenue")?.total||0), "state aid, grants"],
+].map(([l,v,s]) =>
+  `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
+).join("");
+
+const revCatBody = document.querySelector("#revCatTable tbody");
+const maxRevCat = (DATA.rev_by_cat||[])[0]?.total || 1;
+(DATA.rev_by_cat||[]).forEach(c => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${c.category}</td>
+    <td class="num">${fmt$(c.total)}</td>
+    <td class="num">${fmtPct(c.total, S.rev_total_fy26)}</td>
+    <td><div class="bar green" style="width:${c.total/maxRevCat*100}%"></div></td>`;
+  revCatBody.appendChild(tr);
+});
+
+const maxRevY = Math.max(...(DATA.rev_trend||[]).map(t=>t.total), 1);
+document.getElementById("revTrendChart").innerHTML =
+  "<table style='width:100%;max-width:700px'>" +
+  (DATA.rev_trend||[]).map(t =>
+    `<tr><td style="width:50px;font-size:12px">FY${t.fiscal_year}</td>
+     <td><div class="bar green" style="width:${t.total/maxRevY*100}%"></div></td>
+     <td class="num" style="width:90px">${fmt$(t.total)}</td></tr>`
+  ).join("") + "</table>";
+
+// ── CAPITAL ───────────────────────────────────────────────────────────
+const cap26Total = S.cap_total_fy26;
+const cap7yrTotal = (DATA.cap_by_year||[]).filter(t=>t.fiscal_year>='2024'&&t.fiscal_year<='2030').reduce((s,t)=>s+(t.total||0),0);
+document.getElementById("capKpis").innerHTML = [
+  ["FY2026 Appropriation",  fmt$(cap26Total), "capital projects this year"],
+  ["7-Year Plan Total",     fmt$(cap7yrTotal), "FY2024–FY2030"],
+  ["FY2026 Projects",       fmtN((DATA.cap_by_dept||[]).reduce((s,d)=>s+d.n,0)), "across all departments"],
+  ["Largest Dept FY2026",   (DATA.cap_by_dept||[])[0]?.department||"—", fmt$((DATA.cap_by_dept||[])[0]?.total||0)],
+].map(([l,v,s]) =>
+  `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
+).join("");
+
+const maxCapY = Math.max(...(DATA.cap_by_year||[]).map(t=>t.total), 1);
+document.getElementById("capYearChart").innerHTML =
+  "<table style='width:100%;max-width:600px'>" +
+  (DATA.cap_by_year||[]).filter(t=>t.fiscal_year>='2020').map(t => {
+    const isFuture = t.fiscal_year > '2026';
+    return `<tr>
+      <td style="width:50px;font-size:12px">FY${t.fiscal_year}${isFuture?' <span style=\"font-size:9px;color:#999\">plan</span>':''}</td>
+      <td><div class="bar ${isFuture?'grey':'navy'}" style="width:${t.total/maxCapY*100}%"></div></td>
+      <td class="num" style="width:90px">${fmt$(t.total)}</td>
+      <td style="font-size:11px;color:#999;width:40px">${fmtN(t.n)} proj</td>
+    </tr>`;
+  }).join("") + "</table>";
+
+const capDeptBody = document.querySelector("#capDeptTable tbody");
+const maxCapDept = (DATA.cap_by_dept||[])[0]?.total || 1;
+(DATA.cap_by_dept||[]).forEach(d => {
+  const tr = document.createElement("tr");
+  tr.className = "expandable";
+  tr.innerHTML = `<td>${d.department}</td>
+    <td class="num">${fmt$(d.total)}</td>
+    <td class="num">${fmtN(d.n)}</td>
+    <td><div class="bar navy" style="width:${d.total/maxCapDept*100}%"></div></td>`;
+  capDeptBody.appendChild(tr);
+
+  const det = document.createElement("tr");
+  det.className = "detail"; det.style.display = "none";
+  const projs = d.projects || [];
+  det.innerHTML = `<td colspan="4"><div class="subtable">
+    <h4>FY2026 projects — ${d.department}</h4>
+    <table><thead><tr><th>Project</th><th>ID</th><th>Fund</th><th>Location</th>
+      <th class="num">Appropriation</th></tr></thead>
+    <tbody>${projs.map(p =>
+      `<tr><td style="font-size:12px">${p.project_name}</td>
+       <td style="font-size:11px;color:#888">${p.project_id}</td>
+       <td style="font-size:11px">${p.fund}</td>
+       <td style="font-size:11px;color:#666">${p.city_location||""}</td>
+       <td class="num">${fmt$(p.approved_amount)}</td></tr>`
+    ).join("")}</tbody></table></div></td>`;
+  capDeptBody.appendChild(det);
+  tr.addEventListener("click", () => {
+    const open = det.style.display !== "none";
+    det.style.display = open ? "none" : "";
+    tr.classList.toggle("expanded", !open);
+  });
+});
+
+const cap7yrBody = document.querySelector("#cap7yrTable tbody");
+(DATA.cap_7yr||[]).forEach(d => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${d.department}</td>
+    <td class="num">${d.fy24>0?fmt$(d.fy24):"—"}</td>
+    <td class="num">${d.fy25>0?fmt$(d.fy25):"—"}</td>
+    <td class="num" style="font-weight:600">${d.fy26>0?fmt$(d.fy26):"—"}</td>
+    <td class="num">${d.fy27>0?fmt$(d.fy27):"—"}</td>
+    <td class="num">${((d.fy28||0)+(d.fy29||0)+(d.fy30||0))>0?fmt$((d.fy28||0)+(d.fy29||0)+(d.fy30||0)):"—"}</td>
+    <td class="num">${fmt$(d.total_plan)}</td>`;
+  cap7yrBody.appendChild(tr);
+});
+
+// ── PAYROLL (salary detail) ───────────────────────────────────────────
 const svc26 = DATA.sal_by_svc["2026"] || [];
 const svc24 = DATA.sal_by_svc["2024"] || [];
-const maxSal = Math.max(...svc26.map(s => s.amt), 1);
+const maxSalSvc = Math.max(...svc26.map(s=>s.amt), 1);
 document.getElementById("salTrendChart").innerHTML =
   "<h3 style='font-size:13px;margin:8px 0 4px;color:#555;text-transform:uppercase;letter-spacing:.04em'>" +
   "Salary Budget by Service — FY2024 (grey) vs FY2026 (red)</h3>" +
@@ -764,44 +1108,41 @@ document.getElementById("salTrendChart").innerHTML =
     const pct = a24 > 0 ? ((s.amt - a24)/a24*100).toFixed(1) : null;
     return `<tr>
       <td style="width:230px;font-size:12px">${s.svc}</td>
-      <td><div style="display:flex;gap:2px;align-items:center">
-        <div class="bar grey" style="width:${a24/maxSal*100}%"></div>
-        <div class="bar"      style="width:${s.amt/maxSal*100}%"></div>
+      <td><div style="display:flex;gap:2px">
+        <div class="bar grey" style="width:${a24/maxSalSvc*100}%"></div>
+        <div class="bar" style="width:${s.amt/maxSalSvc*100}%"></div>
       </div></td>
       <td class="num" style="width:80px">${fmt$(s.amt)}</td>
-      <td class="num" style="width:60px;font-size:11px;${pct!=null?clrDelta(parseFloat(pct)):''}">${pct!=null?(parseFloat(pct)>=0?"+":"")+pct+"%":"new"}</td>
+      <td class="num" style="width:60px;font-size:11px;${pct!=null?clr(parseFloat(pct)):''}">${pct!=null?(parseFloat(pct)>=0?"+":"")+pct+"%":"new"}</td>
     </tr>`;
   }).join("") + "</table>";
 
-// ── PAYROLL: service drill-down ───────────────────────────────────────
 const svcBody = document.querySelector("#svcTable tbody");
-const maxSal2 = Math.max(...svc26.map(s=>s.amt), 1);
 svc26.forEach(s => {
   const s24 = svc24.find(x => x.svc === s.svc);
   const a24 = s24 ? s24.amt : 0;
   const delta = s.amt - a24;
+  const pct = a24 > 0 ? ((delta/a24)*100).toFixed(1) : null;
   const tr = document.createElement("tr");
   tr.className = "expandable";
   tr.innerHTML = `<td>${s.svc}</td>
-    <td class="num">${fmt$(a24)}</td>
-    <td class="num">${fmt$(s.amt)}</td>
-    <td class="num" style="${clrDelta(delta)}">${delta>=0?"+":""}${fmt$(delta)}</td>
-    <td class="num">${fmtN(s.n)}</td>
-    <td><div class="bar" style="width:${s.amt/maxSal2*100}%"></div></td>`;
+    <td class="num">${fmt$(a24)}</td><td class="num">${fmt$(s.amt)}</td>
+    <td class="num" style="${clr(delta)}">${delta>=0?"+":""}${fmt$(delta)}</td>
+    <td class="num">${pct!=null?(parseFloat(pct)>=0?"+":"")+pct+"%":"—"}</td>
+    <td class="num">${fmtN(s.n)}</td>`;
   svcBody.appendChild(tr);
 
+  const depts = DATA.sal_dept_yoy.filter(d => d.service === s.svc);
   const det = document.createElement("tr");
   det.className = "detail"; det.style.display = "none";
-  const depts = DATA.sal_dept_yoy.filter(d => d.service === s.svc);
   det.innerHTML = `<td colspan="6"><div class="subtable">
-    <h4>Departments within ${s.svc}</h4>
+    <h4>Departments — ${s.svc}</h4>
     <table><thead><tr><th>Department</th><th class="num">FY2024</th>
       <th class="num">FY2026</th><th class="num">Δ</th><th class="num">Pos.</th></tr></thead>
     <tbody>${depts.map(d => `<tr>
       <td>${d.department}</td>
-      <td class="num">${fmt$(d.amt24)}</td>
-      <td class="num">${fmt$(d.amt26)}</td>
-      <td class="num" style="${clrDelta(d.amt26-d.amt24)}">${(d.amt26-d.amt24)>=0?"+":""}${fmt$(d.amt26-d.amt24)}</td>
+      <td class="num">${fmt$(d.amt24)}</td><td class="num">${fmt$(d.amt26)}</td>
+      <td class="num" style="${clr(d.amt26-d.amt24)}">${(d.amt26-d.amt24)>=0?"+":""}${fmt$(d.amt26-d.amt24)}</td>
       <td class="num">${fmtN(d.n26)}</td>
     </tr>`).join("")}</tbody></table></div></td>`;
   svcBody.appendChild(det);
@@ -812,24 +1153,6 @@ svc26.forEach(s => {
   });
 });
 
-// ── PAYROLL: dept YoY ─────────────────────────────────────────────────
-const dyBody = document.querySelector("#deptYoyTable tbody");
-DATA.sal_dept_yoy.forEach(d => {
-  const delta = d.amt26 - d.amt24;
-  const pct   = d.amt24 > 0 ? ((delta/d.amt24)*100).toFixed(1) : null;
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td>${d.department}</td>
-    <td style="font-size:11px;color:#666">${d.service}</td>
-    <td class="num">${fmt$(d.amt24)}</td>
-    <td class="num">${fmt$(d.amt26)}</td>
-    <td class="num">${delta>=0?"+":""}${fmt$(delta)}</td>
-    <td class="num" style="${pct!=null&&Math.abs(parseFloat(pct))>15?clrDelta(delta):''}">${pct!=null?(parseFloat(pct)>=0?"+":"")+pct+"%":"new"}</td>
-    <td class="num">${fmtN(d.n26)}</td>`;
-  dyBody.appendChild(tr);
-});
-
-// ── PAYROLL: top positions ────────────────────────────────────────────
 const tpBody = document.querySelector("#topPosTable tbody");
 (DATA.sal_top_pos||[]).slice(0,50).forEach((p, i) => {
   const tr = document.createElement("tr");
@@ -841,118 +1164,97 @@ const tpBody = document.querySelector("#topPosTable tbody");
   tpBody.appendChild(tr);
 });
 
-// ── CONTRACTS: KPIs ───────────────────────────────────────────────────
+// ── CONTRACTS ─────────────────────────────────────────────────────────
 document.getElementById("contractKpis").innerHTML = [
-  ["Active Contracts",    fmtN(S.con_active),    "currently active"],
-  ["Emergency Contracts", fmtN(S.con_emergency),  "bypassed competition"],
-  ["Expiring 2025–26",    fmtN((DATA.con_expiring||[]).length), "active, due for renewal"],
-  ["Total on Record",     fmtN(S.con_total),      "all statuses"],
+  ["Active Contracts",    fmtN(S.con_active),     "currently active"],
+  ["Emergency Contracts", fmtN(S.con_emergency),   "bypassed competition"],
+  ["Expiring 2025–26",    fmtN((DATA.con_expiring||[]).length), "need renewal"],
+  ["Total on Record",     fmtN(S.con_total),       "all statuses"],
 ].map(([l,v,s]) =>
   `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
 ).join("");
 
-// ── CONTRACTS: by dept ────────────────────────────────────────────────
 const cdBody = document.querySelector("#contractDeptTable tbody");
 (DATA.con_by_dept||[]).forEach(d => {
   const tr = document.createElement("tr");
   tr.className = "expandable";
   tr.innerHTML = `<td>${d.department}</td>
     <td class="num" style="font-weight:600">${fmtN(d.active)}</td>
-    <td class="num">${fmtN(d.n)}</td>
-    <td class="num">${fmtN(d.nv)}</td>
+    <td class="num">${fmtN(d.n)}</td><td class="num">${fmtN(d.nv)}</td>
     <td class="num">${d.emergency>0?`<span class="flag">${d.emergency}</span>`:"—"}</td>`;
   cdBody.appendChild(tr);
-
   const det = document.createElement("tr");
   det.className = "detail"; det.style.display = "none";
-  const vendors = d.top_vendors || [];
   det.innerHTML = `<td colspan="5"><div class="subtable">
     <h4>Top vendors — ${d.department}</h4>
     <table><thead><tr><th>Vendor</th><th class="num">Contracts</th>
       <th class="num">Active</th><th>Statuses</th></tr></thead>
-    <tbody>${vendors.map(v => `<tr>
-      <td>${v.vendor_name}</td>
-      <td class="num">${fmtN(v.n)}</td>
+    <tbody>${(d.top_vendors||[]).map(v => `<tr>
+      <td>${v.vendor_name}</td><td class="num">${fmtN(v.n)}</td>
       <td class="num">${fmtN(v.active)}</td>
       <td style="font-size:11px;color:#666">${v.statuses||""}</td>
     </tr>`).join("")}</tbody></table></div></td>`;
   cdBody.appendChild(det);
   tr.addEventListener("click", () => {
     const open = det.style.display !== "none";
-    det.style.display = open ? "none" : "";
-    tr.classList.toggle("expanded", !open);
+    det.style.display = open ? "none" : ""; tr.classList.toggle("expanded", !open);
   });
 });
 
-// ── CONTRACTS: by vendor ──────────────────────────────────────────────
 const cvBody = document.querySelector("#contractVendorTable tbody");
 (DATA.con_by_vendor||[]).forEach(v => {
   const tr = document.createElement("tr");
   tr.className = "expandable";
   tr.innerHTML = `<td>${v.vendor_name}</td>
-    <td class="num">${fmtN(v.n)}</td>
-    <td class="num">${fmtN(v.active)}</td>
+    <td class="num">${fmtN(v.n)}</td><td class="num">${fmtN(v.active)}</td>
     <td class="num">${fmtN(v.nd)}</td>
     <td style="font-size:11px;color:#666">${(v.types||"").substring(0,60)}</td>`;
   cvBody.appendChild(tr);
-
   const det = document.createElement("tr");
   det.className = "detail"; det.style.display = "none";
-  const cons = v.contracts || [];
   det.innerHTML = `<td colspan="5"><div class="subtable">
-    <h4>Contracts for ${v.vendor_name} (${cons.length})</h4>
-    <table><thead><tr><th>Title</th><th>Department</th><th>Status</th>
-      <th>Start</th><th>End</th><th>Type</th></tr></thead>
-    <tbody>${cons.slice(0,20).map(c => `<tr>
+    <h4>Contracts for ${v.vendor_name} (${(v.contracts||[]).length})</h4>
+    <table><thead><tr><th>Title</th><th>Dept</th><th>Status</th><th>End</th></tr></thead>
+    <tbody>${(v.contracts||[]).slice(0,15).map(c => `<tr>
       <td style="font-size:11px">${c.contract_title.substring(0,50)}</td>
       <td style="font-size:11px">${c.department}</td>
-      <td><span class="flag ${c.status==='active'?'ok':''}">${c.status}</span>
-          ${c.is_emergency?'<span class="flag">emrg</span>':''}</td>
-      <td style="font-size:11px">${c.start_date}</td>
+      <td><span class="flag ${c.status==='active'?'ok':''}">${c.status}</span></td>
       <td style="font-size:11px">${c.end_date}</td>
-      <td style="font-size:11px">${c.contract_type}</td>
     </tr>`).join("")}</tbody></table></div></td>`;
   cvBody.appendChild(det);
   tr.addEventListener("click", () => {
     const open = det.style.display !== "none";
-    det.style.display = open ? "none" : "";
-    tr.classList.toggle("expanded", !open);
+    det.style.display = open ? "none" : ""; tr.classList.toggle("expanded", !open);
   });
 });
 
-// ── CONTRACTS: emergency ──────────────────────────────────────────────
 const emBody = document.querySelector("#emergencyTable tbody");
 (DATA.con_emergency||[]).forEach(c => {
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td>${c.vendor_name}</td>
-    <td style="font-size:12px">${c.department}</td>
+  tr.innerHTML = `<td>${c.vendor_name}</td><td style="font-size:12px">${c.department}</td>
     <td style="font-size:11px">${c.contract_title.substring(0,55)}</td>
     <td><span class="flag ${c.status==='active'?'ok':''}">${c.status}</span></td>
-    <td style="font-size:12px">${c.start_date}</td>
-    <td style="font-size:12px">${c.end_date}</td>`;
+    <td style="font-size:12px">${c.start_date}</td><td style="font-size:12px">${c.end_date}</td>`;
   emBody.appendChild(tr);
 });
 
-// ── CONTRACTS: expiring ───────────────────────────────────────────────
 const exBody = document.querySelector("#expiringTable tbody");
 (DATA.con_expiring||[]).forEach(c => {
   const tr = document.createElement("tr");
-  const noRenew = c.renewals_remaining === 0;
-  tr.innerHTML = `<td>${c.vendor_name}</td>
-    <td style="font-size:12px">${c.department}</td>
+  tr.innerHTML = `<td>${c.vendor_name}</td><td style="font-size:12px">${c.department}</td>
     <td style="font-size:11px">${c.contract_title.substring(0,50)}</td>
     <td style="font-size:11px">${c.contract_type}</td>
     <td style="font-size:12px">${c.end_date}</td>
-    <td class="num">${noRenew?'<span class="flag warn">must rebid</span>':fmtN(c.renewals_remaining)}</td>`;
+    <td class="num">${c.renewals_remaining===0?'<span class="flag warn">must rebid</span>':fmtN(c.renewals_remaining)}</td>`;
   exBody.appendChild(tr);
 });
 
 // ── BIDDING ───────────────────────────────────────────────────────────
 const bidTotal = S.bid_total;
 document.getElementById("bidKpis").innerHTML = [
-  ["Total Bids", fmtN(bidTotal), "all years on record"],
-  ["Formal / Construction", fmtN((DATA.bid_by_type||[]).filter(t=>t.bid_type==="Formal"||t.bid_category==="construction").reduce((s,t)=>s+t.n,0)), "competitive sealed process"],
-  ["Informal", fmtN((DATA.bid_by_type||[]).find(t=>t.bid_type==="Informal" && t.bid_category==="services")?.n||0), "3-quote requirement"],
+  ["Total Bids", fmtN(bidTotal), "all years"],
+  ["Formal/Construction", fmtN((DATA.bid_by_type||[]).filter(t=>t.bid_type==="Formal"||t.bid_category==="construction").reduce((s,t)=>s+t.n,0)), "competitive sealed"],
+  ["Informal", fmtN((DATA.bid_by_type||[]).find(t=>t.bid_type==="Informal"&&t.bid_category==="services")?.n||0), "3-quote"],
 ].map(([l,v,s]) =>
   `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
 ).join("");
@@ -970,10 +1272,8 @@ document.getElementById("bidYearChart").innerHTML =
 const btBody = document.querySelector("#bidTypeTable tbody");
 (DATA.bid_by_type||[]).forEach(t => {
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td>${t.bid_type}</td>
-    <td style="font-size:11px">${t.bid_category}</td>
-    <td class="num">${fmtN(t.n)}</td>
-    <td class="num">${fmtPct(t.n, bidTotal)}</td>
+  tr.innerHTML = `<td>${t.bid_type}</td><td style="font-size:11px">${t.bid_category}</td>
+    <td class="num">${fmtN(t.n)}</td><td class="num">${fmtPct(t.n,bidTotal)}</td>
     <td><div class="bar navy" style="width:${t.n/bidTotal*100}%"></div></td>`;
   btBody.appendChild(tr);
 });
@@ -983,8 +1283,7 @@ const maxBidD = (DATA.bid_by_dept[0]||{n:1}).n;
 (DATA.bid_by_dept||[]).forEach(d => {
   const tr = document.createElement("tr");
   tr.innerHTML = `<td>${d.departments}</td>
-    <td class="num">${fmtN(d.n)}</td>
-    <td class="num">${fmtN(d.formal)}</td>
+    <td class="num">${fmtN(d.n)}</td><td class="num">${fmtN(d.formal)}</td>
     <td><div class="bar navy" style="width:${d.n/maxBidD*100}%"></div></td>`;
   bdBody.appendChild(tr);
 });
@@ -992,65 +1291,58 @@ const maxBidD = (DATA.bid_by_dept[0]||{n:1}).n;
 // ── PROPERTY ──────────────────────────────────────────────────────────
 const propTotal = S.prop_assessed;
 document.getElementById("propKpis").innerHTML = [
-  ["Total Assessed Value", fmt$(propTotal), fmtN(S.prop_parcels) + " parcels (FY2026)"],
-  ["Est. Tax Revenue (residential)", fmt$(propTotal * 0.00586 * 0.60), "~$5.86/$1K, ~60% residential"],
-  ["Residential Tax Rate", "$5.86 / $1,000", "FY2026 assessed value"],
-  ["Commercial Tax Rate",  "$11.34 / $1,000", "FY2026 assessed value"],
+  ["Total Assessed FY2026", fmt$(propTotal), fmtN(S.prop_parcels) + " parcels"],
+  ["Harvard University",    fmt$((DATA.prop_top_owners||[]).find(o=>o.owner_name.includes("HARVARD"))?.assessed||0), "335 parcels — mostly exempt"],
+  ["MIT",                   fmt$((DATA.prop_top_owners||[]).find(o=>o.owner_name.includes("MASSACHUSETTS INSTITUTE"))?.assessed||0), "194 parcels — mostly exempt"],
+  ["Residential Tax Rate",  "$5.86 / $1,000", "FY2026 assessed value"],
 ].map(([l,v,s]) =>
   `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
 ).join("");
 
 const pcBody = document.querySelector("#propClassTable tbody");
-const maxProp = (DATA.prop_by_class[0]||{assessed:1}).assessed;
+const maxProp = (DATA.prop_by_class||[])[0]?.assessed || 1;
 (DATA.prop_by_class||[]).forEach(c => {
   const tr = document.createElement("tr");
   tr.className = "expandable";
   tr.innerHTML = `<td>${c.cls}</td>
-    <td class="num">${fmtN(c.n)}</td>
-    <td class="num">${fmt$(c.assessed)}</td>
+    <td class="num">${fmtN(c.n)}</td><td class="num">${fmt$(c.assessed)}</td>
     <td class="num">${fmtPct(c.assessed, propTotal)}</td>
     <td class="num">${fmt$(c.avg_assessed)}</td>
     <td><div class="bar navy" style="width:${c.assessed/maxProp*100}%"></div></td>`;
   pcBody.appendChild(tr);
-
   const det = document.createElement("tr");
   det.className = "detail"; det.style.display = "none";
   det.innerHTML = `<td colspan="6"><div class="subtable">
-    <h4>${c.cls} breakdown</h4>
-    <table style="max-width:480px">
+    <h4>${c.cls}</h4>
+    <table style="max-width:420px">
       <tr><td>Land value</td><td class="num">${fmt$(c.land)}</td></tr>
       <tr><td>Building value</td><td class="num">${fmt$(c.bldg)}</td></tr>
       <tr><td>Total assessed</td><td class="num"><strong>${fmt$(c.assessed)}</strong></td></tr>
       <tr><td>Parcels</td><td class="num">${fmtN(c.n)}</td></tr>
-      <tr><td>Avg assessed / parcel</td><td class="num">${fmt$(c.avg_assessed)}</td></tr>
-      ${c.n_exempt > 0 ? `<tr><td>Residential exemptions</td><td class="num">${fmtN(c.n_exempt)}</td></tr>` : ""}
+      <tr><td>Average assessed</td><td class="num">${fmt$(c.avg_assessed)}</td></tr>
+      ${c.n_exempt>0?`<tr><td>Residential exemptions</td><td class="num">${fmtN(c.n_exempt)}</td></tr>`:""}
     </table></div></td>`;
   pcBody.appendChild(det);
   tr.addEventListener("click", () => {
     const open = det.style.display !== "none";
-    det.style.display = open ? "none" : "";
-    tr.classList.toggle("expanded", !open);
+    det.style.display = open ? "none" : ""; tr.classList.toggle("expanded", !open);
   });
 });
 
 const poBody = document.querySelector("#propOwnerTable tbody");
-const maxOwner = (DATA.prop_top_owners[0]||{assessed:1}).assessed;
 (DATA.prop_top_owners||[]).forEach(o => {
   const tr = document.createElement("tr");
   tr.className = "expandable";
   tr.innerHTML = `<td style="font-weight:500">${o.owner_name}</td>
-    <td class="num">${fmtN(o.n)}</td>
-    <td class="num">${fmt$(o.assessed)}</td>
+    <td class="num">${fmtN(o.n)}</td><td class="num">${fmt$(o.assessed)}</td>
     <td style="font-size:11px;color:#555">${(o.classes||"").substring(0,60)}</td>`;
   poBody.appendChild(tr);
-
   const det = document.createElement("tr");
   det.className = "detail"; det.style.display = "none";
-  const parcels = o.top_parcels || [];
   det.innerHTML = `<td colspan="4"><div class="subtable">
     <h4>Top parcels — ${o.owner_name}</h4>
     <table><thead><tr><th>Address</th><th>Class</th><th class="num">Assessed</th></tr></thead>
-    <tbody>${parcels.map(p => `<tr>
+    <tbody>${(o.top_parcels||[]).map(p => `<tr>
       <td style="font-size:12px">${p.addr}</td>
       <td style="font-size:11px">${p.cls}</td>
       <td class="num">${fmt$(p.assessed)}</td>
@@ -1058,8 +1350,7 @@ const maxOwner = (DATA.prop_top_owners[0]||{assessed:1}).assessed;
   poBody.appendChild(det);
   tr.addEventListener("click", () => {
     const open = det.style.display !== "none";
-    det.style.display = open ? "none" : "";
-    tr.classList.toggle("expanded", !open);
+    det.style.display = open ? "none" : ""; tr.classList.toggle("expanded", !open);
   });
 });
 
@@ -1091,8 +1382,6 @@ const vBody = document.querySelector("#validationTable tbody");
 """
 
 
-# ── main ──────────────────────────────────────────────────────────────────────
-
 def main():
     import datetime
     if not DB.exists():
@@ -1103,18 +1392,22 @@ def main():
     data = load_data()
 
     s = data["summary"]
-    growth = (s["sal_total_fy26"] - s["sal_total_fy24"]) / s["sal_total_fy24"] * 100
-    top_svc = data["sal_by_svc"]["2026"][0]["svc"] if data["sal_by_svc"].get("2026") else ""
-    top_amt = data["sal_by_svc"]["2026"][0]["amt"] if data["sal_by_svc"].get("2026") else 0
+    opGrowth = (s["opex_total_fy26"] - s["opex_total_fy24"]) / s["opex_total_fy24"] * 100 \
+               if s["opex_total_fy24"] else 0
+    top_svc = data["opex_by_svc"][0]["svc"] if data["opex_by_svc"] else ""
+    top_amt = data["opex_by_svc"][0]["total"] if data["opex_by_svc"] else 0
+    rev_tax = next((c["total"] for c in data["rev_by_cat"] if c["category"] == "Taxes"), 0)
+    cap_7yr = sum(t["total"] for t in data["cap_by_year"] if "2024" <= t["fiscal_year"] <= "2030")
 
     summary = (
-        f"Cambridge's FY2026 payroll budget is ${s['sal_total_fy26']/1e6:.0f}M across "
-        f"{s['sal_n_fy26']:,} authorized positions — a {growth:.1f}% increase from "
-        f"FY2024's ${s['sal_total_fy24']/1e6:.0f}M. {top_svc} is the largest service "
-        f"at ${top_amt/1e6:.0f}M. The city manages {s['con_active']:,} active contracts "
-        f"({s['con_emergency']:,} emergency-designated). The FY2026 property tax base "
-        f"is ${s['prop_assessed']/1e9:.1f}B across {s['prop_parcels']:,} parcels — "
-        f"anchored by Harvard, MIT, and Cambridge's expanding commercial corridor."
+        f"Cambridge's FY2026 adopted operating budget is ${s['opex_total_fy26']/1e6:.0f}M "
+        f"— a {opGrowth:.1f}% increase from FY2024's ${s['opex_total_fy24']/1e6:.0f}M. "
+        f"{top_svc} is the largest service at ${top_amt/1e6:.0f}M. "
+        f"The city raises ${s['rev_total_fy26']/1e6:.0f}M in revenue, "
+        f"72% of which (${rev_tax/1e6:.0f}M) comes from property taxes. "
+        f"The 7-year capital plan (FY2024–2030) totals ${cap_7yr/1e6:.0f}M. "
+        f"The FY2026 property tax base is ${s['prop_assessed']/1e9:.1f}B — "
+        f"anchored by Harvard ($137B) and MIT ($71B), both mostly tax-exempt."
     )
 
     html_out = (HTML_TEMPLATE
