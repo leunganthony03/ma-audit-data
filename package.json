@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "duckdb": "^1.4.4",
     "pptxgenjs": "^4.0.1"
   }
 }

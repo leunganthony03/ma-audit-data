@@ -1,0 +1,35 @@
+# databases (large binary files)
+*.db
+*.duckdb
+*.db-shm
+*.db-wal
+
+# compressed source data
+*.csv.gz
+*.csv
+
+# generated report (re-built from source)
+audit.html
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
+
+# Office / presentation files
+*.pptx
+*.xlsx
+*.docx
+
+# Claude internal
+.claude/
+
+# Analysis scratch work
+analysis/
+github-pages/
