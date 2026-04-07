@@ -92,6 +92,37 @@ def load_data():
     rev_grand = cur.fetchone()
     data["acfr_rev_grand"] = dict(rev_grand) if rev_grand else {}
 
+    # ── BONDS & DEBT ──────────────────────────────────────────────────────
+    print("  → bonds: categories …")
+    cur.execute("SELECT * FROM bond_categories ORDER BY balance_fy25 DESC")
+    data["bond_categories"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → bonds: debt service schedule …")
+    cur.execute("SELECT * FROM bond_debt_service ORDER BY period")
+    data["bond_debt_service"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → bonds: individual issuances …")
+    cur.execute("""
+        SELECT project, rate_range, issue_date, maturity_date,
+               balance_fy24, balance_fy25,
+               (balance_fy24 - balance_fy25) AS retired
+        FROM bonds WHERE balance_fy25 > 0
+        ORDER BY balance_fy25 DESC
+    """)
+    data["bonds_list"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → bonds: summary stats …")
+    cur.execute("SELECT key, value FROM bond_summary")
+    data["bond_summary"] = {r["key"]: r["value"] for r in cur.fetchall()}
+
+    print("  → bonds: historical debt ratios …")
+    cur.execute("SELECT * FROM bond_history ORDER BY fiscal_year")
+    data["bond_history"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → bonds: long-term obligations …")
+    cur.execute("SELECT * FROM bond_lto ORDER BY balance_fy25 DESC")
+    data["bond_lto"] = [dict(r) for r in cur.fetchall()]
+
     # ── OPERATING BUDGET LINE ITEMS ───────────────────────────────────────
     print("  → operating: all FY2025 line items …")
     cur.execute("""
@@ -630,6 +661,7 @@ footer a { color:#9b2335; }
   <a href="#revenue">Revenue</a>
   <a href="#bids">Bids/Procurement</a>
   <a href="#transfers">Transfers &amp; Debt</a>
+  <a href="#bonds">Outstanding Bonds</a>
   <a href="#validation">Validation</a>
 </nav>
 
@@ -886,6 +918,82 @@ on general obligation bonds, MWRA water/sewer assessments, and Cherry Sheet stat
 <table id="transferLinesTable"><thead>
 <tr><th>Department</th><th>Division</th><th>Description</th><th>Fund</th>
     <th class="num">Amount</th></tr>
+</thead><tbody></tbody></table>
+</section>
+
+<!-- OUTSTANDING BONDS -->
+<section id="bonds">
+<h2>Outstanding Bonds &amp; Long-Term Debt — June 30, 2025</h2>
+<p class="lead">Cambridge carries $690.7M in general obligation bonds, funded by a series of
+competitive bond sales since 2012. Bonds finance capital projects — schools, roads, sewers,
+fire stations — and are repaid through annual debt service from the operating budget.</p>
+<div class="ctx-box">
+<strong>Source:</strong> City of Cambridge FY2025 ACFR, Notes to Financial Statements (p. 50–52)
+and Schedule of Bonds and Notes Payable (p. 98–99). Audited by independent auditor, Jan 30 2026.
+<br><br>
+<strong>Legal debt limit:</strong> Massachusetts law caps general obligation debt at 5% of equalized
+assessed valuation ($85.4B × 5% = $4.27B). Cambridge has used only 24.75% of this limit,
+leaving <strong>$3.21B of additional debt capacity</strong>.
+<br><br>
+<strong>Hidden liabilities:</strong> The bond debt ($690.7M) is smaller than Cambridge's unfunded
+other post-employment benefit (OPEB) liability of <strong>$749.8M</strong> — retiree health
+insurance obligations that do not require voter approval or appear in the debt limit calculation.
+</div>
+<div id="bondKpis" class="kpi-row"></div>
+
+<h3>Bond Categories — FY2025 Outstanding</h3>
+<table id="bondCatTable"><thead>
+<tr><th>Category</th><th>Rates</th><th>Final Maturity</th>
+    <th class="num">Added FY25</th><th class="num">Retired FY25</th>
+    <th class="num">Outstanding</th><th class="num">Due &lt; 1yr</th></tr>
+</thead><tbody></tbody></table>
+
+<h3 style="margin-top:16px">Annual Debt Service Schedule — Principal &amp; Interest</h3>
+<p style="font-size:11px;color:#555;margin:0 0 5px">
+Total future debt service: $875.7M ($690.7M principal + $185.0M interest).
+Annual payments decline from $108.6M (FY2026) to $49.7M (FY2041-2045) as bonds mature.
+</p>
+<div id="debtSvcChart"></div>
+<table id="debtSvcTable"><thead>
+<tr><th>Period</th><th class="num">Principal</th><th class="num">Interest</th>
+    <th class="num">Total</th><th class="pct-bar"></th></tr>
+</thead><tbody></tbody></table>
+
+<h3 style="margin-top:16px">Individual Bond Issuances — What Was Financed (click to sort)</h3>
+<p style="font-size:11px;color:#555;margin:0 0 5px">
+Each row is a separate bond issuance. Major capital projects (Tobin School, Fire HQ, King Open School,
+street reconstruction, sewer reconstruction) are typically funded by multiple issuances over several years.
+</p>
+<div class="search-row">
+  <input id="bondSearch" placeholder="Filter by project name …" oninput="filterBonds()">
+  <span id="bondCount" style="font-size:11px;color:#777"></span>
+</div>
+<div class="pager" id="bondPagerTop"></div>
+<table id="bondTable"><thead>
+<tr><th onclick="sortBonds('project')">Project / Purpose</th>
+    <th onclick="sortBonds('rate_range')">Rate</th>
+    <th onclick="sortBonds('issue_date')">Issued</th>
+    <th onclick="sortBonds('maturity_date')">Matures</th>
+    <th onclick="sortBonds('balance_fy24')" class="num">FY24 Balance</th>
+    <th onclick="sortBonds('retired')" class="num">Retired FY25</th>
+    <th onclick="sortBonds('balance_fy25')" class="num">FY25 Balance</th></tr>
+</thead><tbody id="bondBody"></tbody></table>
+<div class="pager" id="bondPagerBot"></div>
+
+<h3 style="margin-top:16px">Other Long-Term Obligations (not in debt limit)</h3>
+<p style="font-size:11px;color:#555;margin:0 0 5px">
+These liabilities are NOT subject to the 5% debt limit and do NOT require voter approval.
+The OPEB liability alone ($749.8M) exceeds the entire bond portfolio.
+</p>
+<table id="ltoTable"><thead>
+<tr><th>Obligation</th><th class="num">Balance June 30, 2025</th><th>Notes</th></tr>
+</thead><tbody></tbody></table>
+
+<h3 style="margin-top:16px">10-Year Debt History (FY2016–FY2025)</h3>
+<div id="debtHistChart"></div>
+<table id="debtHistTable"><thead>
+<tr><th>Year</th><th class="num">Total Debt</th><th class="num">Per Capita</th>
+    <th class="num">% Assessed Value</th><th class="pct-bar"></th></tr>
 </thead><tbody></tbody></table>
 </section>
 
@@ -1517,6 +1625,164 @@ const tlBody=document.querySelector("#transferLinesTable tbody");
     <td style="font-size:10px;color:#777">${l.fund}</td>
     <td class="num">${fp(l.amount)}</td>`;
   tlBody.appendChild(tr);
+});
+
+// ── BONDS & DEBT ─────────────────────────────────────────────────────
+const BS = DATA.bond_summary || {};
+const totalBonds = BS.bonds_outstanding_fy25 || 690707485;
+const debtLimit = BS.debt_limit || 4268964075;
+const legalMargin = BS.legal_margin || 3212381090;
+const opeb = (DATA.bond_lto||[]).find(l=>l.obligation.includes('OPEB'))?.balance_fy25||749843851;
+const pension = (DATA.bond_lto||[]).find(l=>l.obligation.includes('Pension'))?.balance_fy25||128330964;
+const nextYrDS = (DATA.bond_debt_service||[])[0] || {};
+
+document.getElementById("bondKpis").innerHTML = [
+  ["Outstanding Bonds (GO)",    fp(totalBonds),    "June 30, 2025 — General Fund + Sewer"],
+  ["FY2026 Debt Service",       fp(nextYrDS.total||108599156), "principal $79M + interest $29.6M"],
+  ["Bonds Mature Through",      "2045",            "Tobin School last maturity"],
+  ["Legal Debt Margin",         fp(legalMargin),   "75.25% of $4.27B limit still available"],
+  ["OPEB Liability",            fp(opeb),          "retiree health insurance — not in debt limit"],
+  ["Pension Liability",         fp(pension),       "unfunded net pension obligation"],
+].map(([l,v,s]) =>
+  `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
+).join("");
+
+// Bond categories table
+const bcBody = document.querySelector("#bondCatTable tbody");
+(DATA.bond_categories||[]).forEach(c => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td style="font-weight:500">${c.category}</td>
+    <td style="font-size:11px">${c.rate_range}</td>
+    <td style="font-size:11px">${c.maturity_desc}</td>
+    <td class="num" style="color:#2e7d5a">${c.additions>0?"+"+fp(c.additions):"—"}</td>
+    <td class="num" style="color:#c0392b">-${fp(c.retired)}</td>
+    <td class="num" style="font-weight:700">${fp(c.balance_fy25)}</td>
+    <td class="num" style="color:#c0392b">${fp(c.due_within_1yr)}</td>`;
+  bcBody.appendChild(tr);
+});
+
+// Debt service chart + table
+const dsMax = Math.max(...(DATA.bond_debt_service||[]).map(d=>d.total),1);
+document.getElementById("debtSvcChart").innerHTML =
+  "<table style='width:100%;max-width:650px'>" +
+  (DATA.bond_debt_service||[]).map(d => `<tr>
+    <td style="width:80px;font-size:11px">${d.period}</td>
+    <td><div style="display:flex;gap:1px">
+      <div class="bar navy" style="width:${d.principal/dsMax*80}%" title="Principal: ${fp(d.principal)}"></div>
+      <div class="bar grey"  style="width:${d.interest/dsMax*80}%" title="Interest: ${fp(d.interest)}"></div>
+    </div></td>
+    <td class="num" style="width:90px;font-size:11px">${fp(d.total)}</td>
+  </tr>`).join("") +
+  "</table>" +
+  "<div style='font-size:10px;margin:4px 0 0;color:#777'>" +
+  "<span style='display:inline-block;width:10px;height:10px;background:#152644;border-radius:2px;margin-right:3px'></span>Principal " +
+  "<span style='display:inline-block;width:10px;height:10px;background:#bbb;border-radius:2px;margin:0 3px 0 8px'></span>Interest</div>";
+
+const dsBody = document.querySelector("#debtSvcTable tbody");
+(DATA.bond_debt_service||[]).forEach(d => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td style="font-size:12px">${d.period}</td>
+    <td class="num">${fp(d.principal)}</td>
+    <td class="num">${fp(d.interest)}</td>
+    <td class="num" style="font-weight:600">${fp(d.total)}</td>
+    <td><div class="bar navy" style="width:${d.total/dsMax*100}%"></div></td>`;
+  dsBody.appendChild(tr);
+});
+
+// Individual bonds — searchable paginated
+let bondData = (DATA.bonds_list||[]).slice();
+let bondFiltered = bondData.slice();
+let bondPage = 0; const BOND_PG = 30;
+let bondSortCol = 'balance_fy25', bondSortAsc = false;
+
+function sortBonds(col) {
+  if (bondSortCol===col) bondSortAsc=!bondSortAsc;
+  else { bondSortCol=col; bondSortAsc=false; }
+  bondFiltered.sort((a,b) => {
+    const av=a[col]||"", bv=b[col]||"";
+    return typeof av==="number" ? (bondSortAsc?av-bv:bv-av)
+           : bondSortAsc?String(av).localeCompare(String(bv)):String(bv).localeCompare(String(av));
+  });
+  bondPage=0; renderBonds();
+}
+function filterBonds() {
+  const q=(document.getElementById("bondSearch").value||"").toLowerCase();
+  bondFiltered = q ? bondData.filter(b=>(b.project||"").toLowerCase().includes(q)) : bondData.slice();
+  bondPage=0; renderBonds();
+}
+function mkBondPager(id) {
+  const tot=Math.ceil(bondFiltered.length/BOND_PG);
+  const el=document.getElementById(id); el.innerHTML="";
+  const prev=document.createElement("button"); prev.textContent="← Prev";
+  const next=document.createElement("button"); next.textContent="Next →";
+  const info=document.createElement("span");
+  const rng=document.createElement("span"); rng.style.cssText="color:#777;margin-left:auto;font-size:10px";
+  el.appendChild(prev);el.appendChild(info);el.appendChild(next);el.appendChild(rng);
+  const upd=()=>{
+    info.textContent=`Page ${bondPage+1}/${tot||1}`;
+    rng.textContent=`${fN(bondFiltered.length)} bonds`;
+    prev.disabled=bondPage===0; prev.style.opacity=bondPage===0?"0.3":"1";
+    next.disabled=bondPage>=tot-1; next.style.opacity=bondPage>=tot-1?"0.3":"1";
+  };
+  prev.addEventListener("click",ev=>{ev.stopPropagation();if(bondPage>0){bondPage--;renderBonds();}});
+  next.addEventListener("click",ev=>{ev.stopPropagation();if(bondPage<tot-1){bondPage++;renderBonds();}});
+  upd(); return upd;
+}
+let upBondTop, upBondBot;
+function renderBonds() {
+  const body=document.getElementById("bondBody"); body.innerHTML="";
+  bondFiltered.slice(bondPage*BOND_PG,(bondPage+1)*BOND_PG).forEach(b => {
+    const tr=document.createElement("tr");
+    const isMature = b.maturity_date <= "2026-06-30";
+    tr.innerHTML=`<td style="font-size:11px">${b.project}</td>
+      <td style="font-size:10px;color:#777">${b.rate_range}</td>
+      <td style="font-size:10px">${b.issue_date}</td>
+      <td style="font-size:10px${isMature?' ;color:#c0392b':''}">${b.maturity_date}</td>
+      <td class="num">${b.balance_fy24>0?fp(b.balance_fy24):"—"}</td>
+      <td class="num" style="color:#2e7d5a">${b.retired>0?fp(b.retired):"—"}</td>
+      <td class="num" style="font-weight:600">${fp(b.balance_fy25)}</td>`;
+    body.appendChild(tr);
+  });
+  document.getElementById("bondCount").textContent=
+    bondFiltered.length<bondData.length ? `${fN(bondFiltered.length)} of ${fN(bondData.length)} bonds` : `${fN(bondData.length)} bonds`;
+  if(upBondTop)upBondTop(); if(upBondBot)upBondBot();
+}
+upBondTop=mkBondPager("bondPagerTop"); upBondBot=mkBondPager("bondPagerBot");
+renderBonds();
+
+// LTO table
+const ltoBody=document.querySelector("#ltoTable tbody");
+const ltoTotalBond=totalBonds;
+(DATA.bond_lto||[]).forEach(l => {
+  const isLarge = l.balance_fy25 > ltoTotalBond;
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td style="${isLarge?'color:#c0392b;font-weight:700':''}">${l.obligation}${isLarge?' <span class="flag">exceeds bonds</span>':''}</td>
+    <td class="num" style="${isLarge?'font-weight:700;color:#c0392b':''}">${fp(l.balance_fy25)}</td>
+    <td style="font-size:10px;color:#666">${l.note}</td>`;
+  ltoBody.appendChild(tr);
+});
+
+// 10-year history chart + table
+const histMax = Math.max(...(DATA.bond_history||[]).map(h=>h.total_debt),1);
+document.getElementById("debtHistChart").innerHTML =
+  "<h3 style='font-size:12px;margin:8px 0 4px;color:#555;text-transform:uppercase;letter-spacing:.04em'>Total Debt Outstanding FY2016–FY2025</h3>" +
+  "<table style='width:100%;max-width:600px'>" +
+  (DATA.bond_history||[]).map(h => `<tr>
+    <td style="width:50px;font-size:11px">FY${h.fiscal_year}</td>
+    <td><div class="bar navy" style="width:${h.total_debt/histMax*100}%"></div></td>
+    <td class="num" style="width:90px;font-size:11px">${fp(h.total_debt)}</td>
+    <td class="num" style="width:55px;font-size:10px;color:#777">${h.pct_assessed}%</td>
+  </tr>`).join("") + "</table>";
+
+const dhBody=document.querySelector("#debtHistTable tbody");
+(DATA.bond_history||[]).forEach(h => {
+  const tr=document.createElement("tr");
+  tr.innerHTML=`<td style="font-size:12px">FY${h.fiscal_year}</td>
+    <td class="num">${fp(h.total_debt)}</td>
+    <td class="num">$${fN(h.per_capita)}</td>
+    <td class="num">${h.pct_assessed}%</td>
+    <td><div class="bar navy" style="width:${h.total_debt/histMax*100}%"></div></td>`;
+  dhBody.appendChild(tr);
 });
 
 // ── VALIDATION ────────────────────────────────────────────────────────
