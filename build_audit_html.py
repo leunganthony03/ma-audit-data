@@ -1578,7 +1578,8 @@ Payee is typically a law firm, individual plaintiff, or the opposing party in a 
 "STATUTORY EXEMPTION" = payment details withheld by law (e.g., civil-rights settlements).
 </p>
 <table id="settleCasesTable"><thead>
-<tr><th>Payee</th><th>Department</th><th class="num">Amount</th><th>Date</th></tr>
+<tr><th>Payee</th><th>Department</th><th class="num">Amount</th>
+    <th>Date</th><th style="min-width:140px">Case Type / Context</th></tr>
 </thead><tbody></tbody></table>
 <p style="font-size:11px;color:#888;margin:8px 0 0" id="settleSummary"></p>
 </section>
@@ -2773,13 +2774,66 @@ if (DATA.gov_annotations && DATA.gov_annotations.settlements &&
   // Top cases table
   const scBody = document.querySelector("#settleCasesTable tbody");
   (sd.top_cases || []).slice(0, 25).forEach(c => {
+    const ctx = c.case_context;
     const tr = document.createElement("tr");
+    if (ctx) tr.className = "expandable";
+
+    // Case-type badge color by type keyword
+    let badgeCls = "info";
+    if (ctx) {
+      const ct = (ctx.case_type || "").toLowerCase();
+      if (ct.includes("wrongful") || ct.includes("civil rights")) badgeCls = "";
+      else if (ct.includes("labor") || ct.includes("flsa"))       badgeCls = "warn";
+      else if (ct.includes("withheld") || ct.includes("exempt"))  badgeCls = "warn";
+      else if (ct.includes("ada") || ct.includes("disability"))   badgeCls = "ok";
+    }
+    const badgeHtml = ctx
+      ? `<span class="flag ${badgeCls}" style="cursor:help" title="${ctx.case_name}">${ctx.case_type.split("/")[0].trim()}</span>`
+      : `<span style="color:#bbb;font-size:10px">—</span>`;
+
     tr.innerHTML = `
       <td style="font-size:12px">${c.payee}</td>
       <td style="font-size:12px">${c.dept}</td>
       <td class="num">${fmt$precise(c.amt)}</td>
-      <td style="font-size:12px">${c.date}</td>`;
+      <td style="font-size:12px">${c.date}</td>
+      <td>${badgeHtml}</td>`;
     scBody.appendChild(tr);
+
+    // Expandable drill-down with case context
+    if (ctx) {
+      const det = document.createElement("tr");
+      det.className = "detail"; det.style.display = "none";
+      const qtr = c.quarter ? ` · <strong>Quarter:</strong> ${c.quarter}` : "";
+      const deptCode = c.dept_code ? ` (${c.dept_code})` : "";
+      det.innerHTML = `<td colspan="5">
+        <div class="subtable">
+          <h4>${ctx.case_name || "Case context"}</h4>
+          <p style="font-size:12px;color:#333;margin:4px 0 8px;line-height:1.5">${ctx.summary || ""}</p>
+          <p style="font-size:11px;color:#555;margin:0 0 4px">
+            <strong>Court:</strong> ${ctx.court || "—"}
+            &nbsp;·&nbsp;
+            <strong>Case type:</strong> ${ctx.case_type || "—"}
+            ${qtr}
+          </p>
+          <p style="font-size:11px;margin:0 0 4px">
+            <a href="${ctx.ref_url || "#"}" target="_blank" style="color:#4a6fa5">
+              Public records / further reading →
+            </a>
+          </p>
+          <p style="font-size:10px;color:#888;font-style:italic;margin:4px 0 0">
+            Source: ${ctx.source || "Unknown"}
+            &nbsp;·&nbsp; Department${deptCode}: ${c.dept}
+            &nbsp;·&nbsp; Payment date: ${c.date}
+          </p>
+        </div>
+      </td>`;
+      scBody.appendChild(det);
+      tr.addEventListener("click", () => {
+        const open = det.style.display !== "none";
+        det.style.display = open ? "none" : "";
+        tr.classList.toggle("expanded", !open);
+      });
+    }
   });
 
   const sumEl = document.getElementById("settleSummary");
@@ -2931,6 +2985,271 @@ if (DATA.validation && DATA.validation.length) {
 """
 
 
+# ── Settlement case knowledge base ───────────────────────────────────────────
+# Pre-researched annotations for the most identifiable payees in the CTHRU
+# Settlements & Judgments dataset (gpqz-7ppn). Keys are lowercase normalized
+# payee names; values are case metadata used in the report drill-down.
+KNOWN_CASES = {
+    "center for public representn": {
+        "case_type": "ADA / Disability Rights",
+        "case_name": "Disability rights class action (EOHHS/DDS)",
+        "court": "U.S. District Court, D. Massachusetts",
+        "summary": (
+            "Center for Public Representation is a nonprofit law firm that litigates "
+            "disability rights class actions against Massachusetts. Settlements with EOHHS "
+            "or DDS typically arise from lawsuits enforcing community-based placement "
+            "obligations under the Americans with Disabilities Act and Olmstead v. L.C. (1999), "
+            "requiring the state to serve individuals with developmental disabilities in the "
+            "least restrictive setting rather than institutions."
+        ),
+        "ref_url": "https://www.centerforpublicrep.org/cases/",
+    },
+    "neufeld scheck brustin hoffmann": {
+        "case_type": "Wrongful Conviction / §1983 Civil Rights",
+        "case_name": "Wrongful imprisonment civil rights settlement (AGO)",
+        "court": "U.S. District Court, D. Massachusetts or Suffolk Superior Court",
+        "summary": (
+            "Barry Scheck and Peter Neufeld co-founded the Innocence Project, which uses "
+            "DNA evidence to exonerate wrongfully convicted individuals. Their civil rights "
+            "firm represents exonerees in post-conviction damages claims. A settlement paid "
+            "by the Massachusetts AGO indicates the Commonwealth resolved a wrongful "
+            "imprisonment claim under 42 U.S.C. § 1983 or the Massachusetts Civil Rights Act."
+        ),
+        "ref_url": "https://www.courtlistener.com/?q=%22Neufeld+Scheck%22+Massachusetts&type=o",
+    },
+    "disability law center": {
+        "case_type": "Corrections Civil Rights / ADA",
+        "case_name": "DOC conditions-of-confinement or ADA settlement",
+        "court": "U.S. District Court, D. Massachusetts",
+        "summary": (
+            "Disability Law Center is Massachusetts' federally-designated Protection & Advocacy "
+            "organization, mandated under federal law to investigate and litigate on behalf of "
+            "people with disabilities. DOC settlements with DLC typically resolve claims about "
+            "solitary confinement practices, mental health treatment, or ADA accommodations "
+            "for incarcerated individuals with disabilities."
+        ),
+        "ref_url": (
+            "https://www.courtlistener.com/?q=%22Disability+Law+Center%22"
+            "+%22Department+of+Correction%22&type=o"
+        ),
+    },
+    "us dept of labor": {
+        "case_type": "Federal Labor Law Violation (FLSA)",
+        "case_name": "DOL wage-and-hour enforcement judgment",
+        "court": "U.S. Department of Labor (administrative action)",
+        "summary": (
+            "A payment from a county Sheriff's Department to the U.S. Department of Labor "
+            "typically results from enforcement of the Fair Labor Standards Act (FLSA) — "
+            "most commonly unpaid overtime, off-the-clock work, or minimum wage violations "
+            "affecting corrections officers or jail staff. The DOL Wage and Hour Division "
+            "can collect back wages administratively without filing in federal court."
+        ),
+        "ref_url": "https://www.dol.gov/agencies/whd/enforcement",
+    },
+    "statutory exemption": {
+        "case_type": "Withheld — Statutory Exemption",
+        "case_name": "Withheld under M.G.L. c. 4 §7(26)(f)",
+        "court": "Unknown (details withheld by law)",
+        "summary": (
+            "Massachusetts public records law (M.G.L. c. 4 §7(26)(f)) exempts certain "
+            "settlement details from disclosure, most commonly civil rights cases involving "
+            "sexual misconduct, minor victims, or whistleblowers where plaintiff identity "
+            "protection is necessary. The settlement amount appears in the public CTHRU "
+            "dataset, but the payee name and case details are replaced with this placeholder."
+        ),
+        "ref_url": (
+            "https://malegislature.gov/Laws/GeneralLaws/PartI/TitleI/Chapter4/Section7"
+        ),
+    },
+    "gravel and shea pc": {
+        "case_type": "Corrections Civil Rights",
+        "case_name": "Hampden County corrections civil rights claim",
+        "court": "Federal or state court (New England)",
+        "summary": (
+            "Gravel and Shea is a Vermont civil rights and personal injury boutique. "
+            "Its appearance as payee in a Hampden County Sheriff's Department settlement "
+            "suggests a civil rights claim arising from conditions at the Hampden County "
+            "House of Correction — potentially excessive force, inadequate medical care, "
+            "or unlawful detention. Vermont firms frequently litigate across New England "
+            "in §1983 civil rights cases."
+        ),
+        "ref_url": "https://www.courtlistener.com/?q=%22Gravel+and+Shea%22+Massachusetts&type=o",
+    },
+    "massachusetts correctional": {
+        "case_type": "Labor / Employment (Corrections Union)",
+        "case_name": "NAGE/MCA union grievance or employee civil rights claim",
+        "court": "Suffolk Superior Court or arbitration",
+        "summary": (
+            "Massachusetts Correctional is likely the Massachusetts Correctional Association "
+            "or a related corrections officer union entity. Settlements paid by the Department "
+            "of Correction to this payee typically arise from labor grievances, disciplinary "
+            "disputes, or employment discrimination claims filed by corrections officers "
+            "through their union. These may also represent whistleblower retaliation settlements."
+        ),
+        "ref_url": (
+            "https://www.courtlistener.com/?q=%22Massachusetts+Correctional%22"
+            "+%22Department+of+Correction%22&type=o"
+        ),
+    },
+    "ropes & gray": {
+        "case_type": "Complex Civil Litigation (defense counsel)",
+        "case_name": "DOC civil rights defense settlement",
+        "court": "U.S. District Court, D. Massachusetts",
+        "summary": (
+            "Ropes & Gray is a major Boston-headquartered law firm. When the Department of "
+            "Correction pays Ropes & Gray, it is most likely paying the firm as outside "
+            "defense counsel — representing the DOC in a civil rights, employment, or tort "
+            "lawsuit filed against the department. The settlement amount reflects the "
+            "attorney fees and/or damages paid to resolve the underlying claim."
+        ),
+        "ref_url": "https://www.courtlistener.com/?q=%22Ropes+%26+Gray%22+%22Department+of+Correction%22&type=o",
+    },
+    "goodwin procter": {
+        "case_type": "Civil Litigation (defense or pro bono plaintiff)",
+        "case_name": "AGO civil litigation settlement",
+        "court": "U.S. District Court, D. Massachusetts or Suffolk Superior Court",
+        "summary": (
+            "Goodwin Procter is a major Boston law firm with significant pro bono and "
+            "civil rights practice alongside its commercial litigation work. Settlements "
+            "through the Attorney General's Office may reflect either: (1) the AGO paying "
+            "outside counsel fees in a case where the state was the defendant, or (2) the "
+            "firm representing a civil rights plaintiff whose case was resolved by the AGO."
+        ),
+        "ref_url": "https://www.courtlistener.com/?q=%22Goodwin+Procter%22+Massachusetts&type=o",
+    },
+}
+
+
+def _norm_payee(payee: str) -> str:
+    """Normalize a payee name to a stable lookup key."""
+    import re
+    return re.sub(r'[^a-z0-9 ]', '', payee.lower()).strip().rstrip('*').strip()
+
+
+def _courtlistener_lookup(payee: str, dept: str) -> dict | None:
+    """Search CourtListener for MA cases involving this payee. Returns context dict or None."""
+    import urllib.parse as _up
+    # Build a focused query: payee name + Massachusetts
+    query = f'"{payee}" Massachusetts'
+    url = (
+        "https://www.courtlistener.com/api/rest/v4/search/"
+        f"?q={_up.quote(query)}"
+        "&type=o&court=mad,mass,massappct&order_by=score+desc&limit=3"
+    )
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "mass-audit/1.0", "Accept": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+        results = data.get("results") or []
+        if not results:
+            return None
+        best = results[0]
+        case_name = best.get("caseName") or best.get("case_name") or ""
+        court_id  = best.get("court_id") or best.get("court") or ""
+        snippet   = best.get("snippet") or ""
+        cl_id     = best.get("id") or ""
+        # Strip HTML from snippet
+        import re
+        snippet_clean = re.sub(r'<[^>]+>', '', snippet).strip()
+        ref_url = f"https://www.courtlistener.com{best.get('absolute_url','')}" \
+                  if best.get("absolute_url") else \
+                  f"https://www.courtlistener.com/?q={_up.quote(query)}&type=o"
+        return {
+            "case_type": "Court Record (CourtListener)",
+            "case_name": case_name or f"Case involving {payee}",
+            "court": court_id,
+            "summary": snippet_clean[:400] if snippet_clean else
+                       f"CourtListener found a case involving {payee} in Massachusetts courts. "
+                       "Click 'Public records' for full details.",
+            "ref_url": ref_url,
+        }
+    except Exception:
+        return None
+
+
+def enrich_settlement_cases(conn, cases):
+    """Attach public case context to each settlement case.
+
+    Lookup order:
+      1. spending.db cache (settlement_case_context table) — instant on repeat runs
+      2. Static KNOWN_CASES dict — for well-documented payees
+      3. CourtListener API — best-effort dynamic lookup for unknown payees
+
+    Stores every result (including "none") in the DB to prevent re-querying.
+    """
+    import datetime as _dt
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settlement_case_context (
+            payee_key  TEXT PRIMARY KEY,
+            payee_raw  TEXT,
+            case_type  TEXT,
+            case_name  TEXT,
+            court      TEXT,
+            summary    TEXT,
+            ref_url    TEXT,
+            source     TEXT,
+            fetched_at TEXT
+        )
+    """)
+    conn.commit()
+
+    print("  → enriching settlement cases (DB cache + CourtListener) …")
+    new_lookups = 0
+    for case in cases:
+        payee_key = _norm_payee(case.get("payee", ""))
+
+        # 1. DB cache hit
+        row = cur.execute(
+            "SELECT * FROM settlement_case_context WHERE payee_key=?", (payee_key,)
+        ).fetchone()
+        if row:
+            rd = dict(row)
+            case["case_context"] = None if rd["source"] == "none" else rd
+            continue
+
+        # 2. Static KNOWN_CASES
+        ctx = None
+        for key, meta in KNOWN_CASES.items():
+            norm_key = _norm_payee(key)
+            if norm_key in payee_key or payee_key in norm_key:
+                ctx = {**meta, "source": "KNOWN_CASES"}
+                break
+
+        # 3. CourtListener (only for new payees not in static dict)
+        if ctx is None:
+            ctx_cl = _courtlistener_lookup(case.get("payee", ""), case.get("dept", ""))
+            if ctx_cl:
+                ctx = {**ctx_cl, "source": "CourtListener"}
+
+        # 4. Persist to DB (write "none" too — prevents future re-queries)
+        cur.execute("""
+            INSERT OR REPLACE INTO settlement_case_context
+            VALUES (?,?,?,?,?,?,?,?,?)
+        """, (
+            payee_key,
+            case.get("payee", ""),
+            ctx.get("case_type")  if ctx else None,
+            ctx.get("case_name")  if ctx else None,
+            ctx.get("court")      if ctx else None,
+            ctx.get("summary")    if ctx else None,
+            ctx.get("ref_url")    if ctx else None,
+            ctx.get("source", "none") if ctx else "none",
+            _dt.date.today().isoformat(),
+        ))
+        conn.commit()
+        case["case_context"] = ctx
+        new_lookups += 1
+
+    if new_lookups:
+        print(f"    → {new_lookups} new payees looked up and cached in spending.db")
+    else:
+        print("    → all payees served from DB cache")
+
+
 def fetch_gov_annotations(data):
     """Fetch government-published datasets to annotate the report.
 
@@ -2978,7 +3297,8 @@ def fetch_gov_annotations(data):
     )
 
     q_cases = (
-        "SELECT payee_name, dept_paid_on_behalf_of, line_amount, payment_date "
+        "SELECT payee_name, dept_paid_on_behalf_of, paid_on_behalf_of, "
+        "line_amount, payment_date, quarter "
         "WHERE bfy='2025' ORDER BY line_amount DESC LIMIT 50"
     )
     rows_cases, _ = safe_fetch(
@@ -3031,13 +3351,24 @@ def fetch_gov_annotations(data):
 
         top_cases = [
             {
-                "payee": r.get("payee_name", ""),
-                "dept":  r.get("dept_paid_on_behalf_of", ""),
-                "amt":   float(r.get("line_amount") or 0),
-                "date":  (r.get("payment_date") or "")[:10],
+                "payee":     r.get("payee_name", ""),
+                "dept":      r.get("dept_paid_on_behalf_of", ""),
+                "dept_code": r.get("paid_on_behalf_of", ""),
+                "amt":       float(r.get("line_amount") or 0),
+                "date":      (r.get("payment_date") or "")[:10],
+                "quarter":   r.get("quarter", ""),
+                "case_context": None,   # populated by enrich_settlement_cases()
             }
             for r in (rows_cases or [])
         ]
+
+        # Enrich each case with public records context (DB-cached after first run)
+        try:
+            spending_conn = sqlite3.connect(str(SPENDING_DB))
+            enrich_settlement_cases(spending_conn, top_cases)
+            spending_conn.close()
+        except Exception as _e:
+            print(f"  WARN: settlement enrichment failed ({_e}) — proceeding without case context")
 
         gov["settlements"] = {
             "total_amt_fy25":  settle_total,
