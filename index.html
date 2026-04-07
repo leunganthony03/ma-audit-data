@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Massachusetts Fiscal Oversight · Independent Civic Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=Source+Sans+3:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --navy:   #152644;
+  --navy2:  #0e1a2e;
+  --crimson:#9b2335;
+  --gold:   #c8962e;
+  --cream:  #f6f3ee;
+  --warm:   #ede9e2;
+  --ink:    #1a1a1a;
+  --muted:  #6b6560;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Source Sans 3', sans-serif;
+  background: var(--cream);
+  color: var(--ink);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── DISCLAIMER STRIP ─────────────────────────── */
+.disc-strip {
+  background: var(--navy2);
+  color: #b0b8c8;
+  font-size: 11px;
+  letter-spacing: .03em;
+  text-align: center;
+  padding: 7px 24px;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.disc-strip a { color: var(--gold); text-decoration: none; }
+.disc-strip a:hover { text-decoration: underline; }
+
+/* ── HERO ─────────────────────────────────────── */
+.hero {
+  background: var(--navy);
+  color: #fff;
+  padding: 72px 40px 80px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle grid texture */
+.hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+  background-size: 60px 60px;
+  pointer-events: none;
+}
+
+/* Crimson accent bar */
+.hero::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 4px;
+  background: var(--crimson);
+}
+
+.hero-inner {
+  max-width: 1080px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-bottom: 24px;
+}
+.eyebrow::before {
+  content: '';
+  display: block;
+  width: 28px; height: 2px;
+  background: var(--crimson);
+}
+
+h1 {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: clamp(36px, 6vw, 68px);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -.01em;
+  color: #fff;
+  margin-bottom: 20px;
+  max-width: 760px;
+}
+h1 em {
+  font-style: italic;
+  color: #c8d4e8;
+}
+
+.hero-desc {
+  font-size: 17px;
+  font-weight: 300;
+  line-height: 1.65;
+  color: #a8b8cc;
+  max-width: 560px;
+  margin-bottom: 36px;
+}
+
+.hero-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  margin-bottom: 48px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.stat-val {
+  font-family: 'Playfair Display', serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+.stat-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #7090b0;
+}
+
+.hero-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--crimson);
+  color: #fff;
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  text-decoration: none;
+  padding: 14px 28px;
+  border-radius: 3px;
+  transition: background .18s, transform .18s;
+}
+.hero-cta:hover { background: #b52a3e; transform: translateY(-1px); }
+.hero-cta svg { width: 16px; height: 16px; fill: currentColor; flex-shrink: 0; }
+
+/* ── REPORTS GRID ─────────────────────────────── */
+.reports-section {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 64px 40px 80px;
+}
+
+.section-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 32px;
+}
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #d8d0c8;
+}
+
+.reports-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+}
+
+.report-card {
+  background: #fff;
+  border: 1px solid #e0d8d0;
+  border-radius: 6px;
+  padding: 32px 28px 28px;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  box-shadow: 0 2px 8px rgba(21,38,68,.06);
+  transition: box-shadow .2s, transform .2s, border-color .2s;
+  position: relative;
+  overflow: hidden;
+}
+.report-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--crimson);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .25s ease;
+}
+.report-card:hover { box-shadow: 0 8px 28px rgba(21,38,68,.12); transform: translateY(-3px); border-color: #c8c0b8; }
+.report-card:hover::before { transform: scaleX(1); }
+
+.report-card.featured { border-top: 3px solid var(--crimson); }
+.report-card.featured::before { display: none; }
+
+.card-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 2px;
+  margin-bottom: 14px;
+  width: fit-content;
+}
+.badge-state { background: #e8ecf4; color: var(--navy); }
+.badge-city  { background: #f0e8ea; color: var(--crimson); }
+.badge-fy25  { background: #fdf3e3; color: #7a5200; }
+
+.card-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--navy);
+  margin-bottom: 10px;
+}
+
+.card-subtitle {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.55;
+  margin-bottom: 20px;
+  flex: 1;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 22px;
+}
+.tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  background: var(--warm);
+  color: #5a5450;
+  border-radius: 2px;
+}
+
+.card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--crimson);
+  margin-top: auto;
+}
+.card-link svg { width: 14px; height: 14px; fill: currentColor; transition: transform .18s; }
+.report-card:hover .card-link svg { transform: translateX(3px); }
+
+.card-stat {
+  font-family: 'Playfair Display', serif;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--navy);
+  letter-spacing: -.01em;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+.card-stat-lbl {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+/* ── FOOTER ───────────────────────────────────── */
+footer {
+  background: var(--navy2);
+  color: #7080a0;
+  font-size: 12px;
+  padding: 32px 40px;
+  text-align: center;
+  line-height: 1.7;
+  border-top: 3px solid var(--crimson);
+}
+footer a { color: var(--gold); text-decoration: none; }
+footer a:hover { text-decoration: underline; }
+footer strong { color: #c0ccd8; }
+
+/* ── ANIMATIONS ───────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(18px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.hero-inner > * {
+  animation: fadeUp .6s ease both;
+}
+.eyebrow      { animation-delay: .05s; }
+h1            { animation-delay: .15s; }
+.hero-desc    { animation-delay: .25s; }
+.hero-stats   { animation-delay: .35s; }
+.hero-cta     { animation-delay: .43s; }
+
+.report-card {
+  animation: fadeUp .5s ease both;
+}
+.report-card:nth-child(1) { animation-delay: .1s; }
+.report-card:nth-child(2) { animation-delay: .2s; }
+.report-card:nth-child(3) { animation-delay: .3s; }
+
+/* ── RESPONSIVE ───────────────────────────────── */
+@media (max-width: 640px) {
+  .hero { padding: 48px 24px 60px; }
+  .reports-section { padding: 48px 24px 60px; }
+  footer { padding: 28px 24px; }
+  .hero-stats { gap: 20px; }
+  .reports-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="disc-strip">
+  Independent Civic Analysis — Not affiliated with or endorsed by any government agency.
+  Data from public records under M.G.L. c. 66 §10.
+  Contact: <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a>
+</div>
+
+<section class="hero">
+  <div class="hero-inner">
+    <div class="eyebrow">Massachusetts · Independent Fiscal Oversight</div>
+    <h1>Public money.<br><em>Open records.</em></h1>
+    <p class="hero-desc">
+      Independent analysis of Massachusetts government spending, payroll, contracts,
+      and debt — built entirely from public data and published for civic accountability.
+    </p>
+    <div class="hero-stats">
+      <div class="stat">
+        <span class="stat-val">$98.3B</span>
+        <span class="stat-lbl">MA FY2025 gross outflows</span>
+      </div>
+      <div class="stat">
+        <span class="stat-val">2.86M</span>
+        <span class="stat-lbl">spending transactions</span>
+      </div>
+      <div class="stat">
+        <span class="stat-val">165K</span>
+        <span class="stat-lbl">state employees</span>
+      </div>
+      <div class="stat">
+        <span class="stat-val">$909.7M</span>
+        <span class="stat-lbl">Cambridge FY2025 actual spend</span>
+      </div>
+    </div>
+    <a href="audit.html" class="hero-cta">
+      View Massachusetts State Report
+      <svg viewBox="0 0 20 20"><path d="M10 3l7 7-7 7M3 10h14"/></svg>
+    </a>
+  </div>
+</section>
+
+<section class="reports-section">
+  <div class="section-label">Available Reports</div>
+  <div class="reports-grid">
+
+    <!-- MA State -->
+    <a href="audit.html" class="report-card featured">
+      <div class="card-badge badge-state">Massachusetts · State</div>
+      <div class="card-stat">$98.3B</div>
+      <div class="card-stat-lbl">FY2025 gross outflows</div>
+      <div class="card-title">Massachusetts FY2025 Spending Audit</div>
+      <p class="card-subtitle">
+        Full drill-down explorer across 2.86M transactions, 31,865 vendors,
+        160 departments. Includes payroll, COMMBUYS procurement competition analysis,
+        budget reconciliation, government-annotated settlements, and live validation
+        against CTHRU Open Payroll.
+      </p>
+      <div class="card-meta">
+        <span class="tag">Spending</span>
+        <span class="tag">Payroll</span>
+        <span class="tag">Procurement</span>
+        <span class="tag">Settlements</span>
+        <span class="tag">Validation</span>
+      </div>
+      <span class="card-link">
+        Open report
+        <svg viewBox="0 0 20 20"><path d="M10 3l7 7-7 7M3 10h14"/></svg>
+      </span>
+    </a>
+
+    <!-- Cambridge overview -->
+    <a href="cambridge_audit.html" class="report-card">
+      <div class="card-badge badge-city">Cambridge · Multi-Year</div>
+      <div class="card-stat">$992M</div>
+      <div class="card-stat-lbl">FY2026 adopted budget</div>
+      <div class="card-title">Cambridge Fiscal Overview<br>FY2011–2026</div>
+      <p class="card-subtitle">
+        16-year operating budget trend, revenue breakdown (72% property taxes),
+        7-year capital plan, salary positions, contracts, bid history, and
+        property tax base — including Harvard ($137B) and MIT ($71B) holdings.
+      </p>
+      <div class="card-meta">
+        <span class="tag">Budget</span>
+        <span class="tag">Revenue</span>
+        <span class="tag">Capital</span>
+        <span class="tag">Property</span>
+      </div>
+      <span class="card-link">
+        Open report
+        <svg viewBox="0 0 20 20"><path d="M10 3l7 7-7 7M3 10h14"/></svg>
+      </span>
+    </a>
+
+    <!-- Cambridge FY2025 -->
+    <a href="cambridge_2025.html" class="report-card">
+      <div class="card-badge badge-fy25">Cambridge · FY2025 Deep Dive</div>
+      <div class="card-stat">$909.7M</div>
+      <div class="card-stat-lbl">FY2025 actual expenditures (ACFR)</div>
+      <div class="card-title">Cambridge FY2025 Comprehensive Audit</div>
+      <p class="card-subtitle">
+        Audited actuals vs. budget by department, outstanding bonds ($690.7M)
+        with full debt-service schedule, 842 contracts, overtime by division,
+        capital projects, and settlement cases annotated with public court records.
+      </p>
+      <div class="card-meta">
+        <span class="tag">Actuals</span>
+        <span class="tag">Bonds</span>
+        <span class="tag">Overtime</span>
+        <span class="tag">Contracts</span>
+        <span class="tag">Settlements</span>
+      </div>
+      <span class="card-link">
+        Open report
+        <svg viewBox="0 0 20 20"><path d="M10 3l7 7-7 7M3 10h14"/></svg>
+      </span>
+    </a>
+
+  </div>
+</section>
+
+<footer>
+  <p>
+    <strong>Independent Civic Analysis</strong> — not affiliated with or endorsed by the
+    Commonwealth of Massachusetts or the City of Cambridge.
+  </p>
+  <p>
+    All source data is publicly available under Massachusetts public records law (M.G.L. c. 66 §10).
+    Sources: <a href="https://cthru.data.socrata.com" target="_blank">CTHRU</a>,
+    <a href="https://www.commbuys.com" target="_blank">COMMBUYS</a>,
+    <a href="https://data.cambridgema.gov" target="_blank">Cambridge Open Data</a>,
+    <a href="https://budget.data.cambridgema.gov" target="_blank">Cambridge Open Budget</a>.
+    Nothing herein constitutes a legal finding or allegation of misconduct.
+  </p>
+  <p style="margin-top:8px">
+    Contact: <a href="mailto:Oversight-MA@pm.me">Oversight-MA@pm.me</a>
+    &nbsp;·&nbsp;
+    <a href="https://github.com/leunganthony03/ma-audit-data" target="_blank">GitHub</a>
+  </p>
+</footer>
+
+</body>
+</html>
