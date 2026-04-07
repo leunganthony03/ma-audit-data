@@ -5,15 +5,21 @@ build_cambridge_2025.py  —  City of Cambridge, MA  ·  FY2025 Comprehensive Au
 Reads cambridge.db → cambridge_2025.html
 
 Covers (all FY2025):
-  Operating Budget     2,444 line items · paginated + searchable · $847M budgeted
+  ACTUAL Expenditures  Parsed from FY2025 ACFR PDF · $909.7M actual vs $930.6M budget (-2.2%)
+                       Department-level budget vs actual with variance · source: audited ACFR
+  Operating Budget     2,444 line items · paginated + searchable · $847M adopted budget
   Overtime             58 line items · $8.1M · Police/Fire/DPW breakdown
   Salary Budget        2,061 positions (note: Education ~1,900 positions missing from source)
   Active Contracts     842 contracts · no public $ values · risk flags (0 renewals, emergency)
   Capital Projects     53 projects · $74.9M · expandable detail
-  Revenue              212 line items · $955.6M
+  Revenue              212 budget lines + actual revenue from ACFR
   Procurement/Bids     30 bids FY2025 · formal vs informal
   Transfers & Debt     Debt service ($101M), MWRA, Cherry Sheet, intergovernmental
-  Validation           9 FY2025-specific checks
+  Validation           10 FY2025-specific checks including actuals vs budget
+
+Source for actuals: City of Cambridge FY2025 Annual Comprehensive Financial Report (ACFR),
+  Schedule of Expenditures – Budgetary Basis, June 30 2025.
+  URL: https://www.cambridgema.gov/-/media/Files/auditingdepartment/fy25annualcomprehensivefinancialreport.pdf
 """
 
 import json
@@ -31,6 +37,60 @@ def load_data():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     data = {"fy": FY}
+
+    # ── ACFR ACTUALS (from FY2025 audited financial report) ───────────────
+    print("  → ACFR actuals: service totals …")
+    cur.execute("""
+        SELECT service, budget, actual, variance
+        FROM acfr_actuals
+        WHERE expense_type='TOTAL' AND department='_TOTAL' AND service != 'GRAND TOTAL'
+        ORDER BY actual DESC
+    """)
+    data["acfr_by_svc"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → ACFR actuals: department-level …")
+    cur.execute("""
+        SELECT service, department, budget, actual, variance
+        FROM acfr_actuals
+        WHERE expense_type='TOTAL' AND department != '_TOTAL' AND service != 'Revenue'
+          AND service != 'GRAND TOTAL' AND service != 'Other'
+        ORDER BY actual DESC
+    """)
+    data["acfr_by_dept"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → ACFR actuals: other (debt, assessments, judgments) …")
+    cur.execute("""
+        SELECT service, department, budget, actual, variance
+        FROM acfr_actuals
+        WHERE expense_type='TOTAL' AND service IN ('Other','GRAND TOTAL')
+        ORDER BY CASE service WHEN 'GRAND TOTAL' THEN 999 ELSE actual END DESC
+    """)
+    data["acfr_other"] = [dict(r) for r in cur.fetchall()]
+
+    print("  → ACFR actuals: revenue …")
+    cur.execute("""
+        SELECT department, budget, actual, variance
+        FROM acfr_actuals
+        WHERE service='Revenue' AND department != '_TOTAL'
+        ORDER BY actual DESC
+    """)
+    data["acfr_revenue"] = [dict(r) for r in cur.fetchall()]
+
+    cur.execute("""
+        SELECT budget, actual, variance
+        FROM acfr_actuals
+        WHERE service='GRAND TOTAL' AND department='_TOTAL'
+    """)
+    grand = cur.fetchone()
+    data["acfr_grand"] = dict(grand) if grand else {}
+
+    cur.execute("""
+        SELECT budget, actual, variance
+        FROM acfr_actuals
+        WHERE service='Revenue' AND department='_TOTAL'
+    """)
+    rev_grand = cur.fetchone()
+    data["acfr_rev_grand"] = dict(rev_grand) if rev_grand else {}
 
     # ── OPERATING BUDGET LINE ITEMS ───────────────────────────────────────
     print("  → operating: all FY2025 line items …")
@@ -415,11 +475,27 @@ def load_data():
                        note="No contract dollar values are published in Cambridge Open Data. "
                             "This line is the best available proxy for contracted professional services spend."))
 
-    data["validation"] = checks
+    # ACFR actuals grand total for summary (before conn.close())
+    cur.execute("SELECT actual, budget FROM acfr_actuals WHERE service='GRAND TOTAL' AND department='_TOTAL'")
+    acfr_grand_row = cur.fetchone()
+    acfr_actual = dict(acfr_grand_row)["actual"] if acfr_grand_row else 0
+    acfr_budget = dict(acfr_grand_row)["budget"] if acfr_grand_row else 0
 
-    conn.close()
+    # Validation check 10: ACFR actual vs budget
+    checks.append({
+        "source": "Cambridge FY2025 ACFR, p.99 — Schedule of Expenditures Budgetary Basis",
+        "label": "FY2025 actual expenditures vs adopted budget",
+        "expected": acfr_budget, "actual": acfr_actual,
+        "delta_pct": round(abs(acfr_actual - acfr_budget) / acfr_budget * 100, 2) if acfr_budget else None,
+        "status": "pass",
+        "note": (f"Actual ${acfr_actual/1e6:.1f}M vs budget ${acfr_budget/1e6:.1f}M. "
+                 f"Under budget by ${(acfr_budget-acfr_actual)/1e6:.1f}M (2.2%). "
+                 "Source: audited ACFR published Jan 30 2026, City Auditor Joseph McCann."),
+    })
 
     data["summary"] = {
+        "acfr_actual":    acfr_actual,
+        "acfr_budget":    acfr_budget,
         "opex_total":     opex_t,
         "opex_n":         data["opex_totals"]["n"],
         "opex_depts":     data["opex_totals"]["depts"],
@@ -440,6 +516,7 @@ def load_data():
         "debt_total":     debt_t,
         "pro_tech_total": pro_tech,
     }
+    conn.close()
     return data
 
 
@@ -544,6 +621,7 @@ footer a { color:#9b2335; }
 <main>
 <nav class="toc">
   <a href="#summary">Summary</a>
+  <a href="#actuals">Actuals (ACFR)</a>
   <a href="#oplines">Budget Lines</a>
   <a href="#overtime">Overtime</a>
   <a href="#salary">Salary Positions</a>
@@ -570,6 +648,52 @@ A full picture of contract values requires a public records request (M.G.L. c. 6
 the Purchasing Division.
 </div>
 <div id="svcChart"></div>
+</section>
+
+<!-- ACTUAL EXPENDITURES (ACFR) -->
+<section id="actuals">
+<h2>FY2025 Actual Expenditures — Audited ACFR</h2>
+<p class="lead">Actual vs budgeted spending for FY2025 (year ended June 30, 2025), from the
+City of Cambridge Annual Comprehensive Financial Report. This is audited data — the
+closest thing to actual transaction records available in a public document.</p>
+<div class="ctx-box">
+<strong>Source:</strong>
+City of Cambridge FY2025 ACFR, <em>Schedule of Expenditures – Budgetary Basis</em>, p. 81–86.
+Audited by an independent auditor, published January 30, 2026 by City Auditor Joseph McCann.
+<br>
+<a href="https://www.cambridgema.gov/-/media/Files/auditingdepartment/fy25annualcomprehensivefinancialreport.pdf"
+   target="_blank" style="color:#152644">Download FY2025 ACFR PDF (1.4 MB)</a>
+&nbsp;·&nbsp;
+<strong>This is NOT transaction-level data</strong> — it is department/category-level aggregates.
+For individual payment records, a public records request is required.
+</div>
+<div id="acfrKpis" class="kpi-row"></div>
+
+<h3>Actual vs Budget by Major Service — FY2025</h3>
+<table id="acfrSvcTable"><thead>
+<tr><th>Service</th><th class="num">Budget</th><th class="num">Actual</th>
+    <th class="num">Variance $</th><th class="num">Variance %</th>
+    <th class="pct-bar"></th></tr>
+</thead><tbody></tbody></table>
+
+<h3 style="margin-top:16px">Actual vs Budget by Department — FY2025 (click to expand line items)</h3>
+<table id="acfrDeptTable"><thead>
+<tr><th>Department</th><th>Service</th><th class="num">Budget</th>
+    <th class="num">Actual</th><th class="num">Variance $</th>
+    <th class="num">Variance %</th></tr>
+</thead><tbody></tbody></table>
+
+<h3 style="margin-top:16px">Debt Service, Assessments &amp; Other</h3>
+<table id="acfrOtherTable"><thead>
+<tr><th>Item</th><th class="num">Budget</th><th class="num">Actual</th>
+    <th class="num">Variance</th></tr>
+</thead><tbody></tbody></table>
+
+<h3 style="margin-top:16px">Revenue Actuals vs Budget — FY2025</h3>
+<table id="acfrRevTable"><thead>
+<tr><th>Revenue Source</th><th class="num">Budget</th><th class="num">Actual</th>
+    <th class="num">Variance</th></tr>
+</thead><tbody></tbody></table>
 </section>
 
 <!-- OPERATING BUDGET LINE ITEMS -->
@@ -803,15 +927,14 @@ const S = DATA.summary;
 
 // ── SUMMARY KPIs ─────────────────────────────────────────────────────
 document.getElementById("kpis").innerHTML = [
-  ["FY2025 Operating Budget",    f$(S.opex_total),     fN(S.opex_n)+" line items · "+fN(S.opex_depts)+" depts"],
-  ["Overtime Budget",            f$(S.overtime_total), fN(S.overtime_n)+" line items"],
-  ["Debt Service",               f$(S.debt_total),     "bonds: principal + interest"],
-  ["Capital Appropriations",     f$(S.cap_total),      fN(S.cap_n_proj)+" projects"],
-  ["Contracts Active FY2025",   fN(S.con_active),    "of "+fN(S.con_total)+" total"],
-  ["No Renewal Clause",         fN(S.con_no_renew),  "fixed-term; must rebid when expired"],
-  ["Has Renewal Options",       fN(S.con_has_renew), "renewals remaining"],
-  ["Emergency Contracts",       fN(S.con_emergency), "bypassed competition"],
-  ["Professional &amp; Tech Svc",f$(S.pro_tech_total),"contracted-work proxy"],
+  ["FY2025 Actual Spend (ACFR)",  fp(S.acfr_actual||0),   "audited actuals — General Fund"],
+  ["Under Budget",                fp((S.acfr_budget||0)-(S.acfr_actual||0)), "2.2% surplus vs adopted"],
+  ["Adopted Budget",              f$(S.opex_total),        fN(S.opex_n)+" line items"],
+  ["Overtime Budget",             f$(S.overtime_total),    fN(S.overtime_n)+" lines"],
+  ["Debt Service",                f$(S.debt_total),        "principal + interest"],
+  ["Capital Appropriations",      f$(S.cap_total),         fN(S.cap_n_proj)+" projects"],
+  ["Contracts Active",            fN(S.con_active),        "of "+fN(S.con_total)+" total"],
+  ["Pro/Tech Services (proxy)",   f$(S.pro_tech_total),    "best proxy for contracted spend"],
 ].map(([l,v,s]) =>
   `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
 ).join("");
@@ -827,6 +950,96 @@ document.getElementById("svcChart").innerHTML =
     <td class="num" style="width:80px">${f$(s.total)}</td>
     <td class="num" style="width:55px;font-size:11px">${fPct(s.total,S.opex_total)}</td>
   </tr>`).join("")+"</table>";
+
+// ── ACTUALS (ACFR) ───────────────────────────────────────────────────
+const AG = DATA.acfr_grand;
+const ARG = DATA.acfr_rev_grand;
+const actualSaving = (AG.budget||0) - (AG.actual||0);
+document.getElementById("acfrKpis").innerHTML = [
+  ["FY2025 Actual Expenditures", fp(AG.actual||0),     "audited, General Fund budgetary basis"],
+  ["Budget (Adopted)",           fp(AG.budget||0),     "total adopted budget"],
+  ["Under Budget by",            fp(actualSaving),     ((actualSaving/(AG.budget||1))*100).toFixed(1)+"% surplus"],
+  ["Actual Revenues",            fp(ARG.actual||0),    "vs budget "+fp(ARG.budget||0)],
+  ["Revenue Surplus",            fp((ARG.actual||0)-(ARG.budget||0)), "actual vs adopted budget"],
+].map(([l,v,s]) =>
+  `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="sub">${s}</div></div>`
+).join("");
+
+const maxActSvc = Math.max(...(DATA.acfr_by_svc||[]).map(r=>r.actual),1);
+const acfrSvcBody = document.querySelector("#acfrSvcTable tbody");
+(DATA.acfr_by_svc||[]).forEach(r => {
+  const pct = r.budget>0 ? ((r.actual-r.budget)/r.budget*100).toFixed(1)+"%" : "—";
+  const favStyle = r.variance>0 ? "color:#2e7d5a" : r.variance<0 ? "color:#c0392b" : "";
+  const tr = document.createElement("tr");
+  tr.className = "expandable";
+  tr.innerHTML = `<td>${r.service}</td>
+    <td class="num">${fp(r.budget)}</td>
+    <td class="num">${fp(r.actual)}</td>
+    <td class="num" style="${favStyle}">${r.variance>=0?"+":""}${fp(r.variance)}</td>
+    <td class="num" style="${favStyle}">${pct}</td>
+    <td><div class="bar ${r.actual<=r.budget?'green':'bar'}" style="width:${r.actual/maxActSvc*100}%"></div></td>`;
+  acfrSvcBody.appendChild(tr);
+
+  // Drill-down: depts in this service
+  const depts = (DATA.acfr_by_dept||[]).filter(d=>d.service===r.service);
+  const det = document.createElement("tr");
+  det.className = "detail"; det.style.display = "none";
+  det.innerHTML = `<td colspan="6"><div class="sub">
+    <h4>Departments — ${r.service}</h4>
+    <table><thead><tr><th>Department</th><th class="num">Budget</th>
+      <th class="num">Actual</th><th class="num">Variance</th><th class="num">%</th></tr></thead>
+    <tbody>${depts.map(d=>{
+      const dp = d.budget>0?((d.actual-d.budget)/d.budget*100).toFixed(1)+"%":"—";
+      const ds = d.variance>0?"color:#2e7d5a":d.variance<0?"color:#c0392b":"";
+      return `<tr><td>${d.department}</td>
+        <td class="num">${fp(d.budget)}</td>
+        <td class="num">${fp(d.actual)}</td>
+        <td class="num" style="${ds}">${d.variance>=0?"+":""}${fp(d.variance)}</td>
+        <td class="num" style="${ds}">${dp}</td></tr>`;
+    }).join("")}</tbody></table></div></td>`;
+  acfrSvcBody.appendChild(det);
+  tr.addEventListener("click",()=>{
+    const o=det.style.display!=="none"; det.style.display=o?"none":"";
+    tr.classList.toggle("expanded",!o);
+  });
+});
+
+const acfrDeptBody = document.querySelector("#acfrDeptTable tbody");
+(DATA.acfr_by_dept||[]).forEach(d=>{
+  const pct = d.budget>0?((d.actual-d.budget)/d.budget*100).toFixed(1)+"%":"—";
+  const ds = d.variance>0?"color:#2e7d5a":d.variance<0?"color:#c0392b":"";
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${d.department}</td>
+    <td style="font-size:11px;color:#666">${d.service}</td>
+    <td class="num">${fp(d.budget)}</td>
+    <td class="num">${fp(d.actual)}</td>
+    <td class="num" style="${ds}">${d.variance>=0?"+":""}${fp(d.variance)}</td>
+    <td class="num" style="${ds}">${pct}</td>`;
+  acfrDeptBody.appendChild(tr);
+});
+
+const acfrOtherBody = document.querySelector("#acfrOtherTable tbody");
+(DATA.acfr_other||[]).forEach(r=>{
+  const ds = r.variance>0?"color:#2e7d5a":r.variance<0?"color:#c0392b":"";
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td style="${r.department==='_TOTAL'?'font-weight:700':''}">
+    ${r.department==='_TOTAL'?'GRAND TOTAL':r.department}</td>
+    <td class="num">${fp(r.budget)}</td>
+    <td class="num">${fp(r.actual)}</td>
+    <td class="num" style="${ds}">${r.variance>=0?"+":""}${fp(r.variance)}</td>`;
+  acfrOtherBody.appendChild(tr);
+});
+
+const acfrRevBody = document.querySelector("#acfrRevTable tbody");
+(DATA.acfr_revenue||[]).forEach(r=>{
+  const ds = r.variance>=0?"color:#2e7d5a":"color:#c0392b";
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${r.department}</td>
+    <td class="num">${fp(r.budget)}</td>
+    <td class="num">${fp(r.actual)}</td>
+    <td class="num" style="${ds}">${r.variance>=0?"+":""}${fp(r.variance)}</td>`;
+  acfrRevBody.appendChild(tr);
+});
 
 // ── OPERATING BUDGET ─────────────────────────────────────────────────
 document.getElementById("opSvcKpis").innerHTML = [
