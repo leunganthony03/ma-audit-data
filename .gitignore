@@ -8,9 +8,6 @@
 *.csv.gz
 *.csv
 
-# generated report (re-built from source)
-audit.html
-
 # Python cache
 __pycache__/
 *.pyc
