@@ -1,0 +1,12 @@
+User-agent: *
+Allow: /audit.html
+Allow: /cambridge_2025.html
+Allow: /cambridge_audit.html
+Disallow: /*.db
+Disallow: /*.csv
+Disallow: /*.csv.gz
+Disallow: /*.pptx
+Disallow: /node_modules/
+Disallow: /__pycache__/
+Disallow: /analysis/
+Disallow: /github-pages/
